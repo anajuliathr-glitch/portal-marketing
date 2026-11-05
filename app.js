@@ -1,0 +1,374 @@
+/* Portal de Marketing ThR — aprovação de posts.
+   Dados no Supabase (posts, comentarios); a ponte local (automacao-redes/portal_sync.py) move as peças
+   aprovadas para Postar/<Mês>/Aprovados e o publicador posta no horário. */
+const { supabaseUrl, supabaseKey } = window.PORTAL_CONFIG;
+const sb = supabase.createClient(supabaseUrl, supabaseKey);
+const TZ = 'America/Sao_Paulo';
+
+const STATUS = {
+  aguardando: { rotulo: 'Esperando aprovação', cor: 'var(--st-aguardando)' },
+  atencao:    { rotulo: 'Precisa de atenção',  cor: 'var(--st-atencao)' },
+  ajuste:     { rotulo: 'Ajuste pedido',       cor: 'var(--st-ajuste)' },
+  corrigindo: { rotulo: 'Claude corrigindo',   cor: 'var(--st-ajuste)' },
+  aprovado:   { rotulo: 'Agendado',            cor: 'var(--st-agendado)' },
+  publicado:  { rotulo: 'Publicado',           cor: 'var(--st-publicado)' },
+  falhou:     { rotulo: 'Falhou',              cor: 'var(--st-atencao)' },
+  atrasado:   { rotulo: 'Não publicado',       cor: 'var(--st-atencao)' },
+};
+const LEGENDA_CAL = ['aguardando', 'ajuste', 'atencao', 'aprovado', 'publicado'];
+
+const ICONE = {
+  aprovar: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+  calendario: '<rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  planejar: '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>',
+  painel: '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  estatico: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>',
+  carrossel: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  reels: '<rect x="2" y="2" width="20" height="20" rx="2.18"/><line x1="7" y1="2" x2="7" y2="22"/><line x1="17" y1="2" x2="17" y2="22"/><line x1="2" y1="12" x2="22" y2="12"/><line x1="2" y1="7" x2="7" y2="7"/><line x1="2" y1="17" x2="7" y2="17"/><line x1="17" y1="17" x2="22" y2="17"/><line x1="17" y1="7" x2="22" y2="7"/>',
+  story: '<rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/>',
+};
+const FORMATO = { estatico: 'Estático', carrossel: 'Carrossel', reels: 'Reels', story: 'Story' };
+const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar', 'Planejar'], ['painel', 'Painel']];
+
+const st = {
+  sessao: null, aba: 'aprovar', posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
+  mes: mesDe(new Date()), produto: null, slide: {}, ajusteAberto: null, modal: null, carregado: false,
+};
+
+/* ---------- utilidades ---------- */
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]); }
+function icone(nome, tam = 16) { return `<svg width="${tam}" height="${tam}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${ICONE[nome]}</svg>`; }
+function mesDe(d) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit' }).format(d); }
+function diaDe(d) { return new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).format(d); }
+function fmt(iso, opts) { return new Intl.DateTimeFormat('pt-BR', { timeZone: TZ, ...opts }).format(new Date(iso)); }
+function quando(iso) {
+  const sem = fmt(iso, { weekday: 'short' }).replace('.', '');
+  return `${sem} ${fmt(iso, { day: '2-digit', month: '2-digit' })} · ${fmt(iso, { hour: '2-digit', minute: '2-digit' }).replace(':00', 'h').replace(':', 'h')}`;
+}
+function pilula(status) { const s = STATUS[status] || { rotulo: status, cor: 'var(--faint)' }; return `<span class="pilula" style="--c:${s.cor}">${s.rotulo}</span>`; }
+function cortar(t, n) { t = t.trim(); return t.length > n ? t.slice(0, n - 1).trimEnd() + '…' : t; }
+function nome(p) {
+  const semData = p.titulo.replace(/^\d{2}-\d{2} /, '');
+  const partes = semData.split(' - ');
+  const resto = partes.slice(1).join(' - ') || partes[0];
+  if (/^(carrossel|estático)/i.test(resto)) {
+    const linha = (p.legenda || '').split('\n').find(l => l.trim());
+    if (linha) return cortar(linha.replace(/[🎉🧡👉✅🔥]/gu, ''), 72);
+  }
+  return resto;
+}
+function url(caminho) { return caminho ? st.urls[caminho] : null; }
+function miniatura(p) { return url(p.formato === 'reels' ? p.capa : p.midias[0]); }
+function toast(msg) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
+  document.body.append(t); setTimeout(() => t.remove(), 3800);
+}
+function saudacao() {
+  const h = Number(fmt(new Date().toISOString(), { hour: 'numeric', hour12: false }));
+  const oi = h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+  return `${oi} · ${fmt(new Date().toISOString(), { weekday: 'long', day: 'numeric', month: 'long' })}`;
+}
+
+/* ---------- dados ---------- */
+async function carregar() {
+  const [p, c, a] = await Promise.all([
+    sb.from('posts').select('*').order('quando'),
+    sb.from('comentarios').select('*').order('criado_em'),
+    sb.from('aprovadores').select('*'),
+  ]);
+  if (p.error) throw p.error;
+  st.posts = p.data;
+  st.coments = {};
+  for (const x of c.data || []) (st.coments[x.post_id] ||= []).push(x);
+  st.nomes = Object.fromEntries((a.data || []).map(x => [x.email, x.nome]));
+  const caminhos = [...new Set(st.posts.flatMap(x => [...x.midias, x.capa]).filter(Boolean))];
+  const faltam = Date.now() - st.urlsEm > 40 * 60e3 ? caminhos : caminhos.filter(k => !st.urls[k]);
+  if (faltam.length) {
+    if (faltam === caminhos) { st.urls = {}; st.urlsEm = Date.now(); }
+    for (let i = 0; i < faltam.length; i += 200) {
+      const { data } = await sb.storage.from('pecas').createSignedUrls(faltam.slice(i, i + 200), 3600);
+      for (const u of data || []) if (u.signedUrl) st.urls[u.path] = u.signedUrl;
+    }
+  }
+  st.carregado = true;
+}
+
+/* ---------- componentes ---------- */
+function midia(p) {
+  const n = p.midias.length, i = Math.min(st.slide[p.id] || 0, n - 1);
+  const atual = url(p.midias[i]);
+  let el;
+  if (!atual) el = `<div class="carregando">Prévia ainda não enviada</div>`;
+  else if (p.formato === 'reels') el = `<video src="${atual}" poster="${url(p.capa) || ''}" controls playsinline preload="metadata"></video>`;
+  else el = `<img src="${atual}" alt="${esc(nome(p))}${n > 1 ? `, slide ${i + 1} de ${n}` : ''}">`;
+  const nav = n > 1 ? `
+    <button class="seta esq" data-slide="${p.id}" data-d="-1" aria-label="Slide anterior">‹</button>
+    <button class="seta dir" data-slide="${p.id}" data-d="1" aria-label="Próximo slide">›</button>
+    <div class="pontos">${p.midias.map((_, k) => `<i class="${k === i ? 'on' : ''}"></i>`).join('')}</div>` : '';
+  return `<div class="midia">${el}${nav}</div>`;
+}
+
+function historico(p) {
+  const cs = st.coments[p.id] || [];
+  if (!cs.length) return '';
+  return `<div class="historico">${cs.map(c => {
+    const quem = c.autor === 'Claude' ? 'Claude' : (st.nomes[c.autor] || c.autor.split('@')[0]);
+    const cor = { ajuste: 'var(--st-ajuste)', aprovacao: 'var(--st-publicado)', robo: 'var(--orange)' }[c.tipo] || 'var(--line-2)';
+    const acao = { ajuste: 'pediu ajuste', aprovacao: 'aprovou', robo: 'ajustou', nota: '' }[c.tipo];
+    return `<div class="coment" style="--c:${cor}"><b>${esc(quem)}</b> ${acao}<small>v${c.versao} · ${fmt(c.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small>${c.texto ? `<div>${esc(c.texto)}</div>` : ''}</div>`;
+  }).join('')}</div>`;
+}
+
+function card(p) {
+  const pode = ['aguardando', 'atencao'].includes(p.status);
+  const reabrir = p.status === 'aprovado';
+  const aberto = st.ajusteAberto === p.id;
+  let aviso = '';
+  if (p.status === 'atencao') aviso = `<div class="aviso" style="--c:var(--st-atencao)">O Claude não conseguiu fazer este ajuste sozinho. A Ana Julia vai tratar no chat; você ainda pode aprovar como está ou pedir outro ajuste.</div>`;
+  if (p.status === 'corrigindo' || p.status === 'ajuste') aviso = `<div class="aviso" style="--c:var(--st-ajuste)">Ajuste pedido. O Claude corrige em até 15 minutos e o post volta para aprovação.</div>`;
+  if (p.status === 'aprovado') aviso = `<div class="aviso" style="--c:var(--st-agendado)">Aprovado${p.aprovado_por ? ` por ${esc(st.nomes[p.aprovado_por] || p.aprovado_por)}` : ''}. Será publicado ${quando(p.quando)}.</div>`;
+  const redes = Object.keys(p.publicado || {});
+  if (p.status === 'publicado' && redes.length) aviso = `<div class="aviso" style="--c:var(--st-publicado)">Publicado em: ${redes.map(r => r[0].toUpperCase() + r.slice(1)).join(', ')}.</div>`;
+  return `
+  <article class="painel card" data-id="${p.id}">
+    ${midia(p)}
+    <div class="corpo">
+      <div class="meta">
+        <span class="chip">${esc(p.produto)}</span>
+        <span>${icone(p.formato, 14)} ${FORMATO[p.formato]}</span>
+        <span>· ${quando(p.quando)}</span>
+        ${p.versao > 1 ? `<span>· versão ${p.versao}</span>` : ''}
+        <span style="margin-left:auto">${pilula(p.status)}</span>
+      </div>
+      <h2>${esc(nome(p))}</h2>
+      ${p.legenda ? `<div class="legenda">${esc(p.legenda)}</div>` : '<div class="legenda" style="color:var(--faint)">Story sem legenda.</div>'}
+      ${aviso}
+      ${historico(p)}
+      ${aberto ? `
+        <textarea id="txt-${p.id}" placeholder="O que precisa mudar? Ex.: troca a foto, essa tem bebida."></textarea>
+        <div class="acoes">
+          <button class="btn primario" data-enviar="${p.id}">Enviar pedido de ajuste</button>
+          <button class="btn" data-cancelar="${p.id}">Cancelar</button>
+        </div>` : (pode || reabrir) ? `
+        <div class="acoes">
+          ${pode ? `<button class="btn primario" data-aprovar="${p.id}">${icone('aprovar')} Aprovar</button>` : ''}
+          <button class="btn" data-ajuste="${p.id}">Pedir ajuste${reabrir ? ' (tira da agenda)' : ''}</button>
+        </div>` : ''}
+    </div>
+  </article>`;
+}
+
+function linha(p) {
+  const img = miniatura(p);
+  return `<button class="linha" data-abrir="${p.id}">
+    <span class="miniatura" style="${img ? `background-image:url('${img}')` : ''}">${img ? '' : icone(p.formato, 18)}</span>
+    <span><strong>${esc(nome(p))}</strong><small>${FORMATO[p.formato]} · ${esc(p.produto)} · ${quando(p.quando)}</small></span>
+    ${pilula(p.status)}
+  </button>`;
+}
+
+/* ---------- telas ---------- */
+function telaAprovar() {
+  const fila = st.posts.filter(p => ['aguardando', 'atencao'].includes(p.status));
+  const ajustes = st.posts.filter(p => ['ajuste', 'corrigindo'].includes(p.status));
+  const agora = new Date().toISOString();
+  const proximas = st.posts.filter(p => p.status === 'aprovado' && p.quando >= agora).slice(0, 6);
+  let h = fila.length
+    ? `<div class="fila">${fila.map(card).join('')}</div>`
+    : `<div class="painel vazio"><div class="selo"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+        <h2>Tudo em dia!</h2><p>Quando a equipe entregar posts novos, eles aparecem aqui. Enquanto isso, veja o que vem por aí.</p></div>`;
+  if (ajustes.length) h += `<div class="secao-titulo"><h3>Em ajuste</h3><span>${ajustes.length}</span></div><div class="painel lista">${ajustes.map(linha).join('')}</div>`;
+  h += `<div class="secao-titulo"><h3>Próximas publicações</h3><span>${proximas.length}</span></div>
+        <div class="painel lista">${proximas.map(linha).join('') || '<div class="linha"><small>Nada agendado.</small></div>'}</div>`;
+  return `<div class="estreito">${h}</div>`;
+}
+
+function postsDoMes() { return st.posts.filter(p => p.mes === st.mes && (!st.produto || p.produto === st.produto)); }
+
+function telaCalendario() {
+  const [a, m] = st.mes.split('-').map(Number);
+  const doMes = postsDoMes();
+  const produtos = [...new Set(st.posts.filter(p => p.mes === st.mes).map(p => p.produto))].sort();
+  const titulo = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(a, m - 1, 15)));
+  const inicio = new Date(Date.UTC(a, m - 1, 1)), dias = new Date(Date.UTC(a, m, 0)).getUTCDate();
+  const vazios = inicio.getUTCDay(), total = Math.ceil((vazios + dias) / 7) * 7;
+  const hoje = diaDe(new Date());
+  const porDia = {};
+  for (const p of doMes) (porDia[diaDe(new Date(p.quando))] ||= []).push(p);
+  let celulas = '';
+  for (let k = 0; k < total; k++) {
+    const d = k - vazios + 1;
+    if (d < 1 || d > dias) { celulas += '<div class="dia fora vazio-dia"></div>'; continue; }
+    const chave = `${st.mes}-${String(d).padStart(2, '0')}`;
+    const evs = porDia[chave] || [];
+    celulas += `<div class="dia ${chave === hoje ? 'hoje' : ''} ${evs.length ? '' : 'vazio-dia'}"><span class="num">${d}</span>${evs.map(p => {
+      const s = STATUS[p.status] || {};
+      return `<button class="evento" style="--c:${s.cor}" data-abrir="${p.id}"><span class="tipo">${icone(p.formato, 12)} ${FORMATO[p.formato]} · ${esc(p.produto)}</span><b>${esc(nome(p))}</b>${pilula(p.status)}</button>`;
+    }).join('')}</div>`;
+  }
+  const publicados = doMes.filter(p => p.status === 'publicado').length;
+  return `
+  <div class="painel cal-topo">
+    <button class="redondo" data-mes="-1" aria-label="Mês anterior">‹</button>
+    <h2>${titulo[0].toUpperCase() + titulo.slice(1)}<small>${doMes.length} posts · ${publicados} publicados</small></h2>
+    <button class="redondo" data-mes="1" aria-label="Próximo mês">›</button>
+  </div>
+  <div class="filtros">
+    ${LEGENDA_CAL.map(pilula).join('')}
+    <span class="sep"></span>
+    <button class="${st.produto ? '' : 'on'}" data-produto="">Todos</button>
+    ${produtos.map(x => `<button class="${st.produto === x ? 'on' : ''}" data-produto="${esc(x)}">${esc(x)}</button>`).join('')}
+  </div>
+  <div class="grade">${['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'].map(d => `<div class="dow">${d}</div>`).join('')}${celulas}</div>`;
+}
+
+function telaPlanejar() {
+  return `<div class="estreito">
+    <div class="painel planejar-cta">
+      <div><h3>Planejar conteúdo</h3><p>Uma conversa com o Claude, como uma reunião de pauta: ele monta o plano do mês e os textos, e os posts aparecem em Aprovar. Por enquanto o planejamento continua no chat do Claude Code.</p></div>
+      <button class="btn primario" disabled>${icone('calendario')} Em breve</button>
+    </div>
+    <div class="secao-titulo"><h3>Identidade visual</h3><span>o Claude e as squads seguem em todo trabalho</span></div>
+    <div class="cards-2">
+      <div class="painel identidade"><h4>ThR Softwares</h4><p>Marca mãe: ERP, nota fiscal, Caixa Eventos, Agro, Parques e Food.</p>
+        <div class="cores">${['#E87018', '#1E1612', '#F58A3A', '#FFFFFF'].map(c => `<span class="cor"><i style="background:${c}"></i>${c}</span>`).join('')}</div>
+        <p style="margin:12px 0 0">Fonte: Poppins</p></div>
+    </div>
+  </div>`;
+}
+
+function telaPainel() {
+  const doMes = st.posts.filter(p => p.mes === st.mes);
+  const conta = s => doMes.filter(p => s.includes(p.status)).length;
+  const redes = { instagram: 0, facebook: 0, youtube: 0 };
+  for (const p of doMes) if (p.status === 'publicado') for (const r of Object.keys(p.publicado || {})) if (r in redes) redes[r]++;
+  const problemas = doMes.filter(p => ['falhou', 'atrasado', 'atencao'].includes(p.status));
+  const n = (v, t) => `<div class="painel numero"><b>${v}</b><span>${t}</span></div>`;
+  const titulo = new Intl.DateTimeFormat('pt-BR', { month: 'long', timeZone: 'UTC' }).format(new Date(st.mes + '-15T12:00:00Z'));
+  return `
+    <div class="numeros">
+      ${n(doMes.length, `posts em ${titulo}`)}${n(conta(['publicado']), 'publicados')}
+      ${n(conta(['aguardando', 'ajuste', 'corrigindo']), 'em aprovação ou ajuste')}${n(conta(['falhou', 'atrasado', 'atencao']), 'precisam de atenção')}
+    </div>
+    <div class="secao-titulo"><h3>Publicados por rede</h3><span>${titulo}</span></div>
+    <div class="numeros">${n(redes.instagram, 'Instagram')}${n(redes.facebook, 'Facebook')}${n(redes.youtube, 'YouTube (Shorts)')}${n(conta(['aprovado']), 'agendados')}</div>
+    <div class="secao-titulo"><h3>Precisam de atenção</h3><span>${problemas.length}</span></div>
+    <div class="painel lista">${problemas.map(linha).join('') || '<div class="linha"><small>Nenhum problema neste mês.</small></div>'}</div>`;
+}
+
+/* ---------- moldura ---------- */
+const TITULOS = { aprovar: 'Aprovação de posts', calendario: 'Calendário de posts', planejar: 'Planejamento', painel: 'Painel' };
+
+function render() {
+  const app = document.getElementById('app');
+  if (!st.sessao) return renderLogin(app);
+  const pendentes = st.posts.filter(p => ['aguardando', 'atencao'].includes(p.status)).length;
+  const email = st.sessao.user.email;
+  const status = pendentes
+    ? `<span class="ponto laranja"></span> ${pendentes} ${pendentes === 1 ? 'post esperando' : 'posts esperando'} aprovação.`
+    : '<span class="ponto"></span> Tudo em dia por aqui.';
+  const telas = { aprovar: telaAprovar, calendario: telaCalendario, planejar: telaPlanejar, painel: telaPainel };
+  const modal = st.modal && st.posts.find(p => p.id === st.modal);
+  app.innerHTML = `
+  <header class="hero">
+    <div class="topbar">
+      <img class="logo" src="logo.png" alt="ThR Softwares">
+      <nav class="nav">${ABAS.map(([k, t]) => `<button class="${st.aba === k ? 'ativo' : ''}" data-aba="${k}">${icone(k)} ${t}${k === 'aprovar' && pendentes ? ` <span class="badge">${pendentes}</span>` : ''}</button>`).join('')}</nav>
+      <div class="usuario"><button class="avatar" data-menu title="${esc(email)}">${esc((st.nomes[email] || email)[0].toUpperCase())}</button></div>
+    </div>
+    <div class="cabecalho">
+      <div class="saudacao">${saudacao()}</div>
+      <h1>${TITULOS[st.aba]}</h1>
+      <div class="status-linha">${status}</div>
+    </div>
+  </header>
+  <main>${st.carregado ? telas[st.aba]() : '<div class="carregando">Carregando…</div>'}</main>
+  ${modal ? `<div class="fundo-modal" data-fundo><div style="max-width:900px;width:100%;position:relative"><button class="redondo fechar" data-fechar aria-label="Fechar">×</button>${card(modal)}</div></div>` : ''}`;
+}
+
+function renderLogin(app) {
+  app.innerHTML = `
+  <div class="login">
+    <form class="painel" id="form-login">
+      <img src="logo.png" alt="ThR Softwares">
+      <h1>Portal de Marketing</h1>
+      <p>Aprovação e calendário dos posts da ThR</p>
+      <label>E-mail<input type="email" name="email" autocomplete="username" required></label>
+      <label>Senha<input type="password" name="senha" autocomplete="current-password" required></label>
+      <button class="btn primario" style="justify-content:center">Entrar</button>
+      <p class="erro" id="erro-login"></p>
+    </form>
+  </div>`;
+  document.getElementById('form-login').onsubmit = async e => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await sb.auth.signInWithPassword({ email: f.get('email').trim().toLowerCase(), password: f.get('senha') });
+    if (error) document.getElementById('erro-login').textContent = 'E-mail ou senha incorretos.';
+  };
+}
+
+/* ---------- ações ---------- */
+async function atualizar(silencioso = false) {
+  const antes = JSON.stringify([st.posts, st.coments]);
+  try { await carregar(); } catch (e) { if (!silencioso) toast('Não consegui carregar os posts. Tente de novo.'); console.error(e); }
+  if (silencioso && antes === JSON.stringify([st.posts, st.coments])) return; // não reinicia vídeo à toa
+  render();
+}
+
+document.addEventListener('click', async e => {
+  const b = e.target.closest('button, [data-fundo]');
+  if (!b) return;
+  const d = b.dataset;
+  if (d.fundo !== undefined && e.target !== b) return;
+  if (d.aba) { st.aba = d.aba; st.ajusteAberto = null; render(); scrollTo(0, 0); }
+  else if (d.slide) {
+    const p = st.posts.find(x => x.id === d.slide);
+    st.slide[p.id] = ((st.slide[p.id] || 0) + Number(d.d) + p.midias.length) % p.midias.length; render();
+  }
+  else if (d.mes) {
+    const [a, m] = st.mes.split('-').map(Number);
+    st.mes = mesDe(new Date(Date.UTC(a, m - 1 + Number(d.mes), 15))); render();
+  }
+  else if (d.produto !== undefined) { st.produto = d.produto || null; render(); }
+  else if (d.abrir) { st.modal = d.abrir; render(); }
+  else if (d.fechar !== undefined || d.fundo !== undefined) { st.modal = null; st.ajusteAberto = null; render(); }
+  else if (d.ajuste) { st.ajusteAberto = d.ajuste; render(); document.getElementById(`txt-${d.ajuste}`)?.focus(); }
+  else if (d.cancelar) { st.ajusteAberto = null; render(); }
+  else if (d.aprovar) {
+    b.disabled = true;
+    const { error } = await sb.rpc('aprovar', { p_id: d.aprovar });
+    if (error) { toast(error.message); b.disabled = false; return; }
+    toast('Aprovado! Entra na agenda de publicação em até 15 minutos.');
+    st.modal = null; await atualizar();
+  }
+  else if (d.enviar) {
+    const texto = document.getElementById(`txt-${d.enviar}`).value.trim();
+    if (!texto) { toast('Escreva o que precisa mudar.'); return; }
+    b.disabled = true;
+    const { error } = await sb.rpc('pedir_ajuste', { p_id: d.enviar, p_texto: texto });
+    if (error) { toast(error.message); b.disabled = false; return; }
+    toast('Pedido enviado. O Claude corrige e o post volta para aprovação.');
+    st.ajusteAberto = null; st.modal = null; await atualizar();
+  }
+  else if (d.menu !== undefined) abrirMenu();
+});
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.modal) { st.modal = null; render(); } });
+
+function abrirMenu() {
+  const nova = prompt(`Conectado como ${st.sessao.user.email}.\n\nPara TROCAR A SENHA, digite a nova senha (mín. 8 caracteres).\nPara SAIR, digite: sair`);
+  if (!nova) return;
+  if (nova.trim().toLowerCase() === 'sair') { sb.auth.signOut(); return; }
+  if (nova.length < 8) { toast('A senha precisa ter pelo menos 8 caracteres.'); return; }
+  sb.auth.updateUser({ password: nova }).then(({ error }) => toast(error ? 'Não consegui trocar a senha.' : 'Senha trocada.'));
+}
+
+sb.auth.onAuthStateChange((_ev, sessao) => {
+  const entrou = !st.sessao && sessao;
+  st.sessao = sessao;
+  if (!sessao) { st.carregado = false; render(); }
+  else if (entrou) { render(); atualizar(); }
+});
+setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
+document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto) atualizar(true); });
+render();
