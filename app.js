@@ -6,6 +6,8 @@ const sb = supabase.createClient(supabaseUrl, supabaseKey);
 const TZ = 'America/Sao_Paulo';
 
 const STATUS = {
+  pauta:      { rotulo: 'Texto para aprovar',  cor: 'var(--st-pauta)' },
+  produzir:   { rotulo: 'Em produção',         cor: 'var(--st-producao)' },
   aguardando: { rotulo: 'Esperando aprovação', cor: 'var(--st-aguardando)' },
   atencao:    { rotulo: 'Precisa de atenção',  cor: 'var(--st-atencao)' },
   ajuste:     { rotulo: 'Ajuste pedido',       cor: 'var(--st-ajuste)' },
@@ -15,7 +17,7 @@ const STATUS = {
   falhou:     { rotulo: 'Falhou',              cor: 'var(--st-atencao)' },
   atrasado:   { rotulo: 'Não publicado',       cor: 'var(--st-atencao)' },
 };
-const LEGENDA_CAL = ['aguardando', 'ajuste', 'atencao', 'aprovado', 'publicado'];
+const LEGENDA_CAL = ['pauta', 'produzir', 'aguardando', 'ajuste', 'atencao', 'aprovado', 'publicado'];
 
 const ICONE = {
   aprovar: '<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
@@ -30,9 +32,10 @@ const ICONE = {
 const FORMATO = { estatico: 'Estático', carrossel: 'Carrossel', reels: 'Reels', story: 'Story' };
 const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar', 'Planejar'], ['painel', 'Painel']];
 
+const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
   sessao: null, aba: 'aprovar', posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
-  mes: mesDe(new Date()), produto: null, slide: {}, ajusteAberto: null, modal: null, carregado: false,
+  mes: mesDe(new Date()), produto: null, planos: [], formAberto: false, enviando: false, slide: {}, ajusteAberto: null, modal: null, carregado: false,
 };
 
 /* ---------- utilidades ---------- */
@@ -71,15 +74,17 @@ function saudacao() {
 
 /* ---------- dados ---------- */
 async function carregar() {
-  const [p, c, a] = await Promise.all([
+  const [p, c, a, pl] = await Promise.all([
     sb.from('posts').select('*').order('quando'),
     sb.from('comentarios').select('*').order('criado_em'),
     sb.from('aprovadores').select('*'),
+    sb.from('planejamentos').select('*').order('criado_em', { ascending: false }),
   ]);
   if (p.error) throw p.error;
   st.posts = p.data;
   st.coments = {};
   for (const x of c.data || []) (st.coments[x.post_id] ||= []).push(x);
+  st.planos = pl.data || [];
   st.nomes = Object.fromEntries((a.data || []).map(x => [x.email, x.nome]));
   const caminhos = [...new Set(st.posts.flatMap(x => [...x.midias, x.capa]).filter(Boolean))];
   const faltam = Date.now() - st.urlsEm > 40 * 60e3 ? caminhos : caminhos.filter(k => !st.urls[k]);
@@ -95,6 +100,8 @@ async function carregar() {
 
 /* ---------- componentes ---------- */
 function midia(p) {
+  if (!p.midias.length) return `<div class="midia texto"><div><span class="rotulo">${p.status === 'produzir' ? 'Peça em produção' : 'Ainda sem arte'}</span>
+    <h4>${p.formato === 'reels' ? 'Roteiro do Reels' : 'Briefing da arte'}</h4><div class="roteiro">${esc(p.roteiro || 'Sem roteiro.')}</div></div></div>`;
   const n = p.midias.length, i = Math.min(st.slide[p.id] || 0, n - 1);
   const atual = url(p.midias[i]);
   let el;
@@ -120,11 +127,14 @@ function historico(p) {
 }
 
 function card(p) {
-  const pode = ['aguardando', 'atencao'].includes(p.status);
+  const pode = FILA.includes(p.status);
+  const texto = !p.midias.length;
   const reabrir = p.status === 'aprovado';
   const aberto = st.ajusteAberto === p.id;
   let aviso = '';
   if (p.status === 'atencao') aviso = `<div class="aviso" style="--c:var(--st-atencao)">O Claude não conseguiu fazer este ajuste sozinho. A Ana Julia vai tratar no chat; você ainda pode aprovar como está ou pedir outro ajuste.</div>`;
+  if (p.status === 'pauta') aviso = `<div class="aviso" style="--c:var(--st-pauta)">Aprove o texto e o roteiro. Depois disso o Claude produz a arte e o post volta aqui para a aprovação final.</div>`;
+  if (p.status === 'produzir') aviso = `<div class="aviso" style="--c:var(--st-producao)">Texto aprovado. O Claude está produzindo a peça; ela volta aqui para a aprovação final.</div>`;
   if (p.status === 'corrigindo' || p.status === 'ajuste') aviso = `<div class="aviso" style="--c:var(--st-ajuste)">Ajuste pedido. O Claude corrige em até 15 minutos e o post volta para aprovação.</div>`;
   if (p.status === 'aprovado') aviso = `<div class="aviso" style="--c:var(--st-agendado)">Aprovado${p.aprovado_por ? ` por ${esc(st.nomes[p.aprovado_por] || p.aprovado_por)}` : ''}. Será publicado ${quando(p.quando)}.</div>`;
   const redes = Object.keys(p.publicado || {});
@@ -141,6 +151,7 @@ function card(p) {
         <span style="margin-left:auto">${pilula(p.status)}</span>
       </div>
       <h2>${esc(nome(p))}</h2>
+      ${texto && p.cta ? `<div class="meta">CTA: <span class="chip">${esc(p.cta)}</span></div>` : ''}
       ${p.legenda ? `<div class="legenda">${esc(p.legenda)}</div>` : '<div class="legenda" style="color:var(--faint)">Story sem legenda.</div>'}
       ${aviso}
       ${historico(p)}
@@ -151,7 +162,7 @@ function card(p) {
           <button class="btn" data-cancelar="${p.id}">Cancelar</button>
         </div>` : (pode || reabrir) ? `
         <div class="acoes">
-          ${pode ? `<button class="btn primario" data-aprovar="${p.id}">${icone('aprovar')} Aprovar</button>` : ''}
+          ${pode ? `<button class="btn primario" data-aprovar="${p.id}">${icone('aprovar')} ${texto ? 'Aprovar texto' : 'Aprovar'}</button>` : ''}
           <button class="btn" data-ajuste="${p.id}">Pedir ajuste${reabrir ? ' (tira da agenda)' : ''}</button>
         </div>` : ''}
     </div>
@@ -169,15 +180,15 @@ function linha(p) {
 
 /* ---------- telas ---------- */
 function telaAprovar() {
-  const fila = st.posts.filter(p => ['aguardando', 'atencao'].includes(p.status));
-  const ajustes = st.posts.filter(p => ['ajuste', 'corrigindo'].includes(p.status));
+  const fila = st.posts.filter(p => FILA.includes(p.status));
+  const ajustes = st.posts.filter(p => ['ajuste', 'corrigindo', 'produzir'].includes(p.status));
   const agora = new Date().toISOString();
   const proximas = st.posts.filter(p => p.status === 'aprovado' && p.quando >= agora).slice(0, 6);
   let h = fila.length
     ? `<div class="fila">${fila.map(card).join('')}</div>`
     : `<div class="painel vazio"><div class="selo"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
         <h2>Tudo em dia!</h2><p>Quando a equipe entregar posts novos, eles aparecem aqui. Enquanto isso, veja o que vem por aí.</p></div>`;
-  if (ajustes.length) h += `<div class="secao-titulo"><h3>Em ajuste</h3><span>${ajustes.length}</span></div><div class="painel lista">${ajustes.map(linha).join('')}</div>`;
+  if (ajustes.length) h += `<div class="secao-titulo"><h3>Em ajuste ou produção</h3><span>${ajustes.length}</span></div><div class="painel lista">${ajustes.map(linha).join('')}</div>`;
   h += `<div class="secao-titulo"><h3>Próximas publicações</h3><span>${proximas.length}</span></div>
         <div class="painel lista">${proximas.map(linha).join('') || '<div class="linha"><small>Nada agendado.</small></div>'}</div>`;
   return `<div class="estreito">${h}</div>`;
@@ -222,12 +233,54 @@ function telaCalendario() {
   <div class="grade">${['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'].map(d => `<div class="dow">${d}</div>`).join('')}${celulas}</div>`;
 }
 
+const PRODUTOS = ['Caixa Eventos', 'Agro', 'Parques', 'ERP', 'Nota Fiscal', 'Food', 'Institucional'];
+const TIPOS = { mes: ['Mês completo', 'Uma peça por dia, com rodízio entre os produtos'],
+                serie: ['Série paralela', 'Uma série junto com o plano que já existe'],
+                avulso: ['Post avulso', 'Uma publicação fora do plano'] };
+const PLANO_STATUS = { pedido: ['Na fila', 'var(--faint)'], gerando: ['Claude montando', 'var(--st-ajuste)'],
+                       pronto: ['Pronto', 'var(--st-publicado)'], erro: ['Deu erro', 'var(--st-atencao)'] };
+
+function proximoMes() { const [a, m] = mesDe(new Date()).split('-').map(Number); return mesDe(new Date(Date.UTC(a, m, 15))); }
+function nomeMes(mes) { const t = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(mes + '-15T12:00:00Z')); return t[0].toUpperCase() + t.slice(1); }
+
+function formPlano() {
+  const campo = (nome, rotulo, dica) => `<label class="campo">${rotulo}<textarea name="${nome}" rows="2" placeholder="${dica}"></textarea></label>`;
+  return `<form class="painel form-plano" id="form-plano">
+    <div class="campo">Tipo de plano<div class="tipos">${Object.entries(TIPOS).map(([k, [t, d]], i) =>
+      `<label class="tipo"><input type="radio" name="tipo" value="${k}" ${i === 0 ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div></div>
+    <label class="campo">Mês<input type="month" name="mes" value="${proximoMes()}" required></label>
+    <div class="campo">Produtos<div class="chips">${PRODUTOS.map(x => `<label class="chk"><input type="checkbox" name="produtos" value="${x}"><span>${x}</span></label>`).join('')}</div><small>Nenhum marcado = todos, com rodízio.</small></div>
+    ${campo('objetivo', 'Objetivo', 'Ex.: gerar pedidos de Proposta Comercial do Caixa Eventos para o réveillon')}
+    ${campo('datas', 'Datas e campanhas', 'Ex.: Natal, réveillon, férias escolares, campanha de fim de ano até 20/12')}
+    ${campo('temas', 'Temas e ideias', 'Ex.: mostrar clientes reais, bastidores da equipe, dúvidas que chegam no suporte')}
+    ${campo('observacoes', 'Observações', 'Ex.: menos estático, mais Reels; nada de bebida nas fotos')}
+    <div class="acoes"><button class="btn primario" ${st.enviando ? 'disabled' : ''}>${icone('planejar')} Mandar para a fábrica</button>
+      <button type="button" class="btn" data-fechar-plano>Cancelar</button></div>
+  </form>`;
+}
+
 function telaPlanejar() {
+  const qtd = id => st.posts.filter(p => p.planejamento_id === id).length;
+  const planos = st.planos.map(pl => {
+    const [rot, cor] = PLANO_STATUS[pl.status];
+    return `<div class="linha plano">
+      <span class="miniatura">${icone('calendario', 18)}</span>
+      <span><strong>${TIPOS[pl.tipo][0]} · ${nomeMes(pl.mes)}</strong>
+        <small>Pedido por ${esc(st.nomes[pl.criado_por] || pl.criado_por)} em ${fmt(pl.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${qtd(pl.id) ? ` · ${qtd(pl.id)} posts` : ''}</small>
+        ${pl.resumo ? `<small class="resumo">${esc(pl.resumo)}</small>` : ''}</span>
+      <span class="pilula" style="--c:${cor}">${rot}</span>
+    </div>`;
+  }).join('');
   return `<div class="estreito">
-    <div class="painel planejar-cta">
-      <div><h3>Planejar conteúdo</h3><p>Uma conversa com o Claude, como uma reunião de pauta: ele monta o plano do mês e os textos, e os posts aparecem em Aprovar. Por enquanto o planejamento continua no chat do Claude Code.</p></div>
-      <button class="btn primario" disabled>${icone('calendario')} Em breve</button>
-    </div>
+    ${st.formAberto ? formPlano() : `<div class="painel planejar-cta">
+      <div><h3>Planejar conteúdo</h3><p>Responda algumas perguntas, como numa reunião de pauta. Pode ser o plano do mês, uma série paralela ou um post avulso. Um plano não apaga o outro.</p>
+        <ol class="passos"><li>Você preenche o tipo de plano, o mês, os produtos e as ideias.</li>
+        <li>O Claude roda a squad de planejamento e monta a pauta e os textos, em cerca de 1 a 2 horas.</li>
+        <li>Os textos aparecem em <b>Aprovar</b>. Aprovado o texto, o Claude produz a arte e ela volta para a aprovação final.</li></ol></div>
+      <button class="btn primario" data-novo-plano>${icone('calendario')} Começar</button>
+    </div>`}
+    <div class="secao-titulo"><h3>Pedidos de planejamento</h3><span>${st.planos.length}</span></div>
+    <div class="painel lista">${planos || '<div class="linha"><small>Nenhum pedido ainda.</small></div>'}</div>
     <div class="secao-titulo"><h3>Identidade visual</h3><span>o Claude e as squads seguem em todo trabalho</span></div>
     <div class="cards-2">
       <div class="painel identidade"><h4>ThR Softwares</h4><p>Marca mãe: ERP, nota fiscal, Caixa Eventos, Agro, Parques e Food.</p>
@@ -262,7 +315,7 @@ const TITULOS = { aprovar: 'Aprovação de posts', calendario: 'Calendário de p
 function render() {
   const app = document.getElementById('app');
   if (!st.sessao) return renderLogin(app);
-  const pendentes = st.posts.filter(p => ['aguardando', 'atencao'].includes(p.status)).length;
+  const pendentes = st.posts.filter(p => FILA.includes(p.status)).length;
   const email = st.sessao.user.email;
   const status = pendentes
     ? `<span class="ponto laranja"></span> ${pendentes} ${pendentes === 1 ? 'post esperando' : 'posts esperando'} aprovação.`
@@ -350,7 +403,23 @@ document.addEventListener('click', async e => {
     toast('Pedido enviado. O Claude corrige e o post volta para aprovação.');
     st.ajusteAberto = null; st.modal = null; await atualizar();
   }
+  else if (d.novoPlano !== undefined) { st.formAberto = true; render(); }
+  else if (d.fecharPlano !== undefined) { st.formAberto = false; render(); }
   else if (d.menu !== undefined) abrirMenu();
+});
+
+document.addEventListener('submit', async e => {
+  if (e.target.id !== 'form-plano') return;
+  e.preventDefault();
+  const f = new FormData(e.target);
+  st.enviando = true; e.target.querySelector('.primario').disabled = true;
+  const { error } = await sb.rpc('criar_planejamento', {
+    p_tipo: f.get('tipo'), p_mes: f.get('mes'), p_produtos: f.getAll('produtos'), p_objetivo: f.get('objetivo'),
+    p_datas: f.get('datas'), p_temas: f.get('temas'), p_observacoes: f.get('observacoes') });
+  st.enviando = false;
+  if (error) { toast(error.message); e.target.querySelector('.primario').disabled = false; return; }
+  toast('Pedido enviado! A fábrica começa em até 15 minutos.');
+  st.formAberto = false; await atualizar();
 });
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.modal) { st.modal = null; render(); } });
@@ -369,6 +438,6 @@ sb.auth.onAuthStateChange((_ev, sessao) => {
   if (!sessao) { st.carregado = false; render(); }
   else if (entrou) { render(); atualizar(); }
 });
-setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
-document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto) atualizar(true); });
+setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && !st.formAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
+document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto && !st.formAberto) atualizar(true); });
 render();

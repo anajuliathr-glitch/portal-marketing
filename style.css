@@ -220,3 +220,29 @@ input { padding: 11px 12px; border-radius: 10px; background: var(--bg); border: 
   .numeros { grid-template-columns: repeat(2, 1fr); }
   .planejar-cta { flex-direction: column; align-items: flex-start; }
 }
+
+/* ---------- planejar (fábrica) ---------- */
+:root { --st-pauta: #B794F6; --st-producao: #8C7CF0; }
+.passos { margin: 12px 0 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
+.form-plano { padding: 22px 24px; display: grid; gap: 16px; }
+.campo { display: grid; gap: 7px; font-size: 13px; font-weight: 600; }
+.campo small { color: var(--faint); font-weight: 400; font-size: 12px; }
+.campo textarea { min-height: 0; font-weight: 400; }
+.campo input[type=month] { font-weight: 400; color-scheme: dark; max-width: 220px; }
+.tipos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.tipo { position: relative; display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; cursor: pointer; font-weight: 400; }
+.tipo input { position: absolute; opacity: 0; }
+.tipo b { font-weight: 600; font-size: 13.5px; }
+.tipo:has(input:checked) { border-color: var(--orange); background: rgba(232, 112, 24, .08); box-shadow: 0 0 0 1px var(--orange); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chk { position: relative; }
+.chk input { position: absolute; opacity: 0; }
+.chk span { display: inline-block; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--line-2); font-weight: 400; font-size: 12.5px; color: var(--muted); cursor: pointer; }
+.chk input:checked + span { background: var(--orange); border-color: var(--orange); color: #fff; }
+.chk input:focus-visible + span, .tipo:has(input:focus-visible) { outline: 2px solid var(--orange-2); outline-offset: 2px; }
+.plano .resumo { display: block; margin-top: 4px; color: var(--muted); }
+.midia.texto { background: var(--surface-2); place-items: stretch; padding: 22px; border-right: 1px solid var(--line); }
+.midia.texto .rotulo { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--st-pauta); }
+.midia.texto h4 { margin: 6px 0 10px; font-size: 15px; }
+.roteiro { white-space: pre-wrap; font-size: 13px; color: #E6DDD7; max-height: 480px; overflow: auto; }
+@media (max-width: 860px) { .tipos { grid-template-columns: 1fr; } }
