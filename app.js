@@ -35,7 +35,7 @@ const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar'
 const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
   sessao: null, aba: 'aprovar', posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
-  mes: mesDe(new Date()), produto: null, planos: [], formAberto: false, enviando: false, slide: {}, ajusteAberto: null, modal: null, carregado: false,
+  mes: mesDe(new Date()), produto: null, planos: [], ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, modal: null, carregado: false,
 };
 
 /* ---------- utilidades ---------- */
@@ -74,17 +74,19 @@ function saudacao() {
 
 /* ---------- dados ---------- */
 async function carregar() {
-  const [p, c, a, pl] = await Promise.all([
+  const [p, c, a, pl, pt] = await Promise.all([
     sb.from('posts').select('*').order('quando'),
     sb.from('comentarios').select('*').order('criado_em'),
     sb.from('aprovadores').select('*'),
     sb.from('planejamentos').select('*').order('criado_em', { ascending: false }),
+    sb.from('ponte').select('*'),
   ]);
   if (p.error) throw p.error;
   st.posts = p.data;
   st.coments = {};
   for (const x of c.data || []) (st.coments[x.post_id] ||= []).push(x);
   st.planos = pl.data || [];
+  st.ultimaRodada = (pt.data || []).find(x => x.chave === 'ultima_rodada')?.valor || null;
   st.nomes = Object.fromEntries((a.data || []).map(x => [x.email, x.nome]));
   const caminhos = [...new Set(st.posts.flatMap(x => [...x.midias, x.capa]).filter(Boolean))];
   const faltam = Date.now() - st.urlsEm > 40 * 60e3 ? caminhos : caminhos.filter(k => !st.urls[k]);
@@ -97,6 +99,43 @@ async function carregar() {
   }
   st.carregado = true;
 }
+
+/* ---------- tempo do robô ---------- */
+const CICLO_MIN = 15;
+const ESTIMATIVA_MIN = { reels: 45, carrossel: 15, estatico: 10, story: 10 };
+function estimativa(p) { return p.midias.length ? ESTIMATIVA_MIN[p.formato] : 3; }
+function hora(d) { return fmt(d.toISOString(), { hour: '2-digit', minute: '2-digit' }); }
+function minutosDesde(iso) { return Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60e3)); }
+function proximaVerificacao() {
+  if (!st.ultimaRodada) return null;
+  return new Date(new Date(st.ultimaRodada).getTime() + CICLO_MIN * 60e3);
+}
+function textoFila() {
+  const prox = proximaVerificacao();
+  if (!prox) return `O robô verifica a cada ${CICLO_MIN} minutos.`;
+  if (prox.getTime() < Date.now() - 5 * 60e3) return 'A próxima verificação está atrasada: o computador da ponte pode estar desligado ou fora da internet.';
+  return `Na fila. O robô começa na próxima verificação, por volta das ${hora(prox)}.`;
+}
+function textoTrabalhando(inicio, est) {
+  const m = minutosDesde(inicio);
+  const base = `Começou às ${hora(new Date(inicio))} · ${m} min até agora`;
+  return m <= est ? `${base} · costuma levar até ~${est} min` : `${base} · passou da estimativa de ~${est} min; vídeos podem levar até 1 hora`;
+}
+function porcentagem(inicio, est) { return Math.min(95, Math.round(minutosDesde(inicio) / est * 100)); }
+function progresso(p) {
+  const est = estimativa(p);
+  return `<div class="progresso" data-inicio="${p.atualizado_em}" data-est="${est}">
+    <div class="barra"><i style="width:${porcentagem(p.atualizado_em, est)}%"></i></div>
+    <small class="tempo">${textoTrabalhando(p.atualizado_em, est)}</small></div>`;
+}
+setInterval(() => {
+  for (const el of document.querySelectorAll('[data-inicio]')) {
+    const { inicio, est } = el.dataset;
+    const t = el.querySelector('.tempo'), b = el.querySelector('.barra i');
+    if (t) t.textContent = textoTrabalhando(inicio, Number(est));
+    if (b) b.style.width = porcentagem(inicio, Number(est)) + '%';
+  }
+}, 20e3);
 
 /* ---------- componentes ---------- */
 function midia(p) {
@@ -135,7 +174,8 @@ function card(p) {
   if (p.status === 'atencao') aviso = `<div class="aviso" style="--c:var(--st-atencao)">O Claude não conseguiu fazer este ajuste sozinho. A Ana Julia vai tratar no chat; você ainda pode aprovar como está ou pedir outro ajuste.</div>`;
   if (p.status === 'pauta') aviso = `<div class="aviso" style="--c:var(--st-pauta)">Aprove o texto e o roteiro. Depois disso o Claude produz a arte e o post volta aqui para a aprovação final.</div>`;
   if (p.status === 'produzir') aviso = `<div class="aviso" style="--c:var(--st-producao)">Texto aprovado. O Claude está produzindo a peça; ela volta aqui para a aprovação final.</div>`;
-  if (p.status === 'corrigindo' || p.status === 'ajuste') aviso = `<div class="aviso" style="--c:var(--st-ajuste)">Ajuste pedido. O Claude corrige em até 15 minutos e o post volta para aprovação.</div>`;
+  if (p.status === 'ajuste') aviso = `<div class="aviso" style="--c:var(--st-ajuste)"><b>Ajuste pedido.</b> ${textoFila()} Depois disso, ${p.formato === 'reels' && p.midias.length ? 'refazer um Reels costuma levar de 20 a 45 minutos' : `leva em média ${estimativa(p)} minutos`}.</div>`;
+  if (p.status === 'corrigindo') aviso = `<div class="aviso" style="--c:var(--st-ajuste)"><b>O Claude está fazendo o ajuste.</b> O post volta para aprovação assim que terminar.${progresso(p)}</div>`;
   if (p.status === 'aprovado') aviso = `<div class="aviso" style="--c:var(--st-agendado)">Aprovado${p.aprovado_por ? ` por ${esc(st.nomes[p.aprovado_por] || p.aprovado_por)}` : ''}. Será publicado ${quando(p.quando)}.</div>`;
   const redes = Object.keys(p.publicado || {});
   if (p.status === 'publicado' && redes.length) aviso = `<div class="aviso" style="--c:var(--st-publicado)">Publicado em: ${redes.map(r => r[0].toUpperCase() + r.slice(1)).join(', ')}.</div>`;
@@ -173,7 +213,7 @@ function linha(p) {
   const img = miniatura(p);
   return `<button class="linha" data-abrir="${p.id}">
     <span class="miniatura" style="${img ? `background-image:url('${img}')` : ''}">${img ? '' : icone(p.formato, 18)}</span>
-    <span><strong>${esc(nome(p))}</strong><small>${FORMATO[p.formato]} · ${esc(p.produto)} · ${quando(p.quando)}</small></span>
+    <span><strong>${esc(nome(p))}</strong><small>${FORMATO[p.formato]} · ${esc(p.produto)} · ${quando(p.quando)}${p.status === 'corrigindo' ? ` · <b class="trabalhando">Claude trabalhando há ${minutosDesde(p.atualizado_em)} min</b>` : p.status === 'ajuste' && proximaVerificacao() ? ` · começa por volta das ${hora(proximaVerificacao())}` : ''}</small></span>
     ${pilula(p.status)}
   </button>`;
 }

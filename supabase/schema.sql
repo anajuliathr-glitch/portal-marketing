@@ -158,3 +158,13 @@ begin
   if not found then raise exception 'este post não pode mais ser ajustado'; end if;
   insert into comentarios (post_id, autor, tipo, texto, versao) values (p_id, lower(auth.jwt() ->> 'email'), 'ajuste', trim(p_texto), v);
 end $$;
+
+-- ================= Estado da ponte (para o portal mostrar "próxima verificação") =================
+create table if not exists ponte (
+  chave text primary key,
+  valor text not null,
+  atualizado_em timestamptz not null default now()
+);
+alter table ponte enable row level security;
+drop policy if exists ler_ponte on ponte;
+create policy ler_ponte on ponte for select to authenticated using (eh_aprovador());

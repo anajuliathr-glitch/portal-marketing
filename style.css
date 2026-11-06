@@ -246,3 +246,11 @@ input { padding: 11px 12px; border-radius: 10px; background: var(--bg); border: 
 .midia.texto h4 { margin: 6px 0 10px; font-size: 15px; }
 .roteiro { white-space: pre-wrap; font-size: 13px; color: #E6DDD7; max-height: 480px; overflow: auto; }
 @media (max-width: 860px) { .tipos { grid-template-columns: 1fr; } }
+
+/* ---------- tempo do robô ---------- */
+.progresso { margin-top: 10px; display: grid; gap: 6px; }
+.barra { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.barra i { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--st-ajuste), var(--orange)); transition: width .6s ease; }
+.progresso .tempo { color: var(--muted); font-size: 12px; }
+.trabalhando { color: var(--st-ajuste); font-weight: 500; }
+.fundo-modal .meta { padding-right: 44px; }
