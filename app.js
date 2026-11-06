@@ -34,7 +34,7 @@ const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar'
 
 const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
-  sessao: null, aba: 'aprovar', posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
+  sessao: null, aba: 'aprovar', histAberto: {}, posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
   mes: mesDe(new Date()), produto: null, planos: [], ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, modal: null, carregado: false,
 };
 
@@ -157,7 +157,9 @@ function midia(p) {
 function historico(p) {
   const cs = st.coments[p.id] || [];
   if (!cs.length) return '';
-  return `<div class="historico">${cs.map(c => {
+  const aberto = st.histAberto[p.id], ocultos = aberto ? 0 : cs.length - 1;
+  const botao = cs.length > 1 ? `<button class="ver-hist" data-hist="${p.id}">${aberto ? 'Recolher histórico' : `Ver histórico (${ocultos} ${ocultos > 1 ? 'anteriores' : 'anterior'})`}</button>` : '';
+  return `<div class="historico${aberto ? ' tudo' : ''}">${botao}${cs.slice(ocultos).map(c => {
     const quem = c.autor === 'Claude' ? 'Claude' : (st.nomes[c.autor] || c.autor.split('@')[0]);
     const cor = { ajuste: 'var(--st-ajuste)', aprovacao: 'var(--st-publicado)', robo: 'var(--orange)' }[c.tipo] || 'var(--line-2)';
     const acao = { ajuste: 'pediu ajuste', aprovacao: 'aprovou', robo: 'ajustou', nota: '' }[c.tipo];
@@ -422,6 +424,7 @@ document.addEventListener('click', async e => {
     const [a, m] = st.mes.split('-').map(Number);
     st.mes = mesDe(new Date(Date.UTC(a, m - 1 + Number(d.mes), 15))); render();
   }
+  else if (d.hist) { st.histAberto[d.hist] = !st.histAberto[d.hist]; render(); }
   else if (d.produto !== undefined) { st.produto = d.produto || null; render(); }
   else if (d.abrir) { st.modal = d.abrir; render(); }
   else if (d.fechar !== undefined || d.fundo !== undefined) { st.modal = null; st.ajusteAberto = null; render(); }
