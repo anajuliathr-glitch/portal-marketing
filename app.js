@@ -16,6 +16,7 @@ const STATUS = {
   publicado:  { rotulo: 'Publicado',           cor: 'var(--st-publicado)' },
   falhou:     { rotulo: 'Falhou',              cor: 'var(--st-atencao)' },
   atrasado:   { rotulo: 'Não publicado',       cor: 'var(--st-atencao)' },
+  reprovado:  { rotulo: 'Não aprovado',        cor: 'var(--faint)' },
 };
 const LEGENDA_CAL = ['pauta', 'produzir', 'aguardando', 'ajuste', 'atencao', 'aprovado', 'publicado'];
 
@@ -35,7 +36,7 @@ const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar'
 const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
   sessao: null, aba: 'aprovar', histAberto: {}, posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
-  mes: mesDe(new Date()), produto: null, planos: [], ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, modal: null, carregado: false,
+  mes: mesDe(new Date()), produto: null, planos: [], ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, descartarAberto: null, modal: null, carregado: false,
 };
 
 /* ---------- utilidades ---------- */
@@ -161,8 +162,8 @@ function historico(p) {
   const botao = cs.length > 1 ? `<button class="ver-hist" data-hist="${p.id}">${aberto ? 'Recolher histórico' : `Ver histórico (${ocultos} ${ocultos > 1 ? 'anteriores' : 'anterior'})`}</button>` : '';
   return `<div class="historico${aberto ? ' tudo' : ''}">${botao}${cs.slice(ocultos).map(c => {
     const quem = c.autor === 'Claude' ? 'Claude' : (st.nomes[c.autor] || c.autor.split('@')[0]);
-    const cor = { ajuste: 'var(--st-ajuste)', aprovacao: 'var(--st-publicado)', robo: 'var(--orange)' }[c.tipo] || 'var(--line-2)';
-    const acao = { ajuste: 'pediu ajuste', aprovacao: 'aprovou', robo: 'ajustou', nota: '' }[c.tipo];
+    const cor = { ajuste: 'var(--st-ajuste)', aprovacao: 'var(--st-publicado)', robo: 'var(--orange)', reprovacao: 'var(--st-atencao)' }[c.tipo] || 'var(--line-2)';
+    const acao = { ajuste: 'pediu ajuste', aprovacao: 'aprovou', robo: 'ajustou', nota: '', reprovacao: 'não aprovou' }[c.tipo];
     return `<div class="coment" style="--c:${cor}"><b>${esc(quem)}</b> ${acao}<small>v${c.versao} · ${fmt(c.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</small>${c.texto ? `<div>${esc(c.texto)}</div>` : ''}</div>`;
   }).join('')}</div>`;
 }
@@ -172,6 +173,8 @@ function card(p) {
   const texto = !p.midias.length;
   const reabrir = p.status === 'aprovado';
   const aberto = st.ajusteAberto === p.id;
+  const descartar = st.descartarAberto === p.id;
+  const podeDescartar = pode || reabrir || p.status === 'ajuste';
   let aviso = '';
   if (p.status === 'atencao') aviso = `<div class="aviso" style="--c:var(--st-atencao)">O Claude não conseguiu fazer este ajuste sozinho. A Ana Julia vai tratar no chat; você ainda pode aprovar como está ou pedir outro ajuste.</div>`;
   if (p.status === 'pauta') aviso = `<div class="aviso" style="--c:var(--st-pauta)">Aprove o texto e o roteiro. Depois disso o Claude produz a arte e o post volta aqui para a aprovação final.</div>`;
@@ -202,10 +205,17 @@ function card(p) {
         <div class="acoes">
           <button class="btn primario" data-enviar="${p.id}">Enviar pedido de ajuste</button>
           <button class="btn" data-cancelar="${p.id}">Cancelar</button>
-        </div>` : (pode || reabrir) ? `
+        </div>` : descartar ? `
+        <div class="aviso" style="--c:var(--st-atencao)"><b>Não aprovar este post?</b> Ele sai da fila${reabrir ? ' e da agenda' : ''} e não será publicado. Os arquivos vão para a pasta <i>Reprovados</i> do mês.</div>
+        <textarea id="mot-${p.id}" placeholder="Motivo (opcional). Ex.: tema repetido, não vamos usar."></textarea>
+        <div class="acoes">
+          <button class="btn perigo" data-descartar-ok="${p.id}">Não aprovar e tirar da fila</button>
+          <button class="btn" data-cancelar="${p.id}">Cancelar</button>
+        </div>` : (pode || reabrir || podeDescartar) ? `
         <div class="acoes">
           ${pode ? `<button class="btn primario" data-aprovar="${p.id}">${icone('aprovar')} ${texto ? 'Aprovar texto' : 'Aprovar'}</button>` : ''}
-          <button class="btn" data-ajuste="${p.id}">Pedir ajuste${reabrir ? ' (tira da agenda)' : ''}</button>
+          ${pode || reabrir ? `<button class="btn" data-ajuste="${p.id}">Pedir ajuste${reabrir ? ' (tira da agenda)' : ''}</button>` : ''}
+          <button class="btn sutil" data-descartar="${p.id}">Não aprovar</button>
         </div>` : ''}
     </div>
   </article>`;
@@ -236,12 +246,12 @@ function telaAprovar() {
   return `<div class="estreito">${h}</div>`;
 }
 
-function postsDoMes() { return st.posts.filter(p => p.mes === st.mes && (!st.produto || p.produto === st.produto)); }
+function postsDoMes() { return st.posts.filter(p => p.mes === st.mes && p.status !== 'reprovado' && (!st.produto || p.produto === st.produto)); }
 
 function telaCalendario() {
   const [a, m] = st.mes.split('-').map(Number);
   const doMes = postsDoMes();
-  const produtos = [...new Set(st.posts.filter(p => p.mes === st.mes).map(p => p.produto))].sort();
+  const produtos = [...new Set(st.posts.filter(p => p.mes === st.mes && p.status !== 'reprovado').map(p => p.produto))].sort();
   const titulo = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(Date.UTC(a, m - 1, 15)));
   const inicio = new Date(Date.UTC(a, m - 1, 1)), dias = new Date(Date.UTC(a, m, 0)).getUTCDate();
   const vazios = inicio.getUTCDay(), total = Math.ceil((vazios + dias) / 7) * 7;
@@ -333,7 +343,7 @@ function telaPlanejar() {
 }
 
 function telaPainel() {
-  const doMes = st.posts.filter(p => p.mes === st.mes);
+  const doMes = st.posts.filter(p => p.mes === st.mes && p.status !== 'reprovado');
   const conta = s => doMes.filter(p => s.includes(p.status)).length;
   const redes = { instagram: 0, facebook: 0, youtube: 0 };
   for (const p of doMes) if (p.status === 'publicado') for (const r of Object.keys(p.publicado || {})) if (r in redes) redes[r]++;
@@ -415,7 +425,7 @@ document.addEventListener('click', async e => {
   if (!b) return;
   const d = b.dataset;
   if (d.fundo !== undefined && e.target !== b) return;
-  if (d.aba) { st.aba = d.aba; st.ajusteAberto = null; render(); scrollTo(0, 0); }
+  if (d.aba) { st.aba = d.aba; st.ajusteAberto = null; st.descartarAberto = null; render(); scrollTo(0, 0); }
   else if (d.slide) {
     const p = st.posts.find(x => x.id === d.slide);
     st.slide[p.id] = ((st.slide[p.id] || 0) + Number(d.d) + p.midias.length) % p.midias.length; render();
@@ -427,9 +437,18 @@ document.addEventListener('click', async e => {
   else if (d.hist) { st.histAberto[d.hist] = !st.histAberto[d.hist]; render(); }
   else if (d.produto !== undefined) { st.produto = d.produto || null; render(); }
   else if (d.abrir) { st.modal = d.abrir; render(); }
-  else if (d.fechar !== undefined || d.fundo !== undefined) { st.modal = null; st.ajusteAberto = null; render(); }
-  else if (d.ajuste) { st.ajusteAberto = d.ajuste; render(); document.getElementById(`txt-${d.ajuste}`)?.focus(); }
-  else if (d.cancelar) { st.ajusteAberto = null; render(); }
+  else if (d.fechar !== undefined || d.fundo !== undefined) { st.modal = null; st.ajusteAberto = null; st.descartarAberto = null; render(); }
+  else if (d.ajuste) { st.ajusteAberto = d.ajuste; st.descartarAberto = null; render(); document.getElementById(`txt-${d.ajuste}`)?.focus(); }
+  else if (d.cancelar) { st.ajusteAberto = null; st.descartarAberto = null; render(); }
+  else if (d.descartar) { st.descartarAberto = d.descartar; st.ajusteAberto = null; render(); document.getElementById(`mot-${d.descartar}`)?.focus(); }
+  else if (d.descartarOk) {
+    b.disabled = true;
+    const motivo = document.getElementById(`mot-${d.descartarOk}`)?.value.trim() || '';
+    const { error } = await sb.rpc('reprovar', { p_id: d.descartarOk, p_texto: motivo });
+    if (error) { toast(error.message); b.disabled = false; return; }
+    toast('Post não aprovado. Saiu da fila; os arquivos vão para Reprovados em até 15 minutos.');
+    st.descartarAberto = null; st.modal = null; await atualizar();
+  }
   else if (d.aprovar) {
     b.disabled = true;
     const { error } = await sb.rpc('aprovar', { p_id: d.aprovar });
@@ -481,6 +500,6 @@ sb.auth.onAuthStateChange((_ev, sessao) => {
   if (!sessao) { st.carregado = false; render(); }
   else if (entrou) { render(); atualizar(); }
 });
-setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && !st.formAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
-document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto && !st.formAberto) atualizar(true); });
+setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && !st.descartarAberto && !st.formAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
+document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto && !st.descartarAberto && !st.formAberto) atualizar(true); });
 render();

@@ -168,3 +168,24 @@ create table if not exists ponte (
 alter table ponte enable row level security;
 drop policy if exists ler_ponte on ponte;
 create policy ler_ponte on ponte for select to authenticated using (eh_aprovador());
+
+-- ================= Não aprovar (descartar o post) =================
+-- reprovado = descartado pelo aprovador: sai da fila e da agenda; a ponte move os arquivos para Postar/<Mês>/Reprovados
+alter table posts drop constraint if exists posts_status_check;
+alter table posts add constraint posts_status_check check (status in
+  ('pauta','produzir','aguardando','ajuste','corrigindo','atencao','aprovado','publicado','falhou','atrasado','reprovado'));
+alter table comentarios drop constraint if exists comentarios_tipo_check;
+alter table comentarios add constraint comentarios_tipo_check check (tipo in ('ajuste','aprovacao','robo','nota','reprovacao'));
+
+create or replace function reprovar(p_id text, p_texto text) returns void
+language plpgsql security definer set search_path = public as $$
+declare v int;
+begin
+  if not eh_aprovador() then raise exception 'sem permissão'; end if;
+  update posts set status = 'reprovado', atualizado_em = now()
+   where id = p_id and status in ('pauta','aguardando','atencao','aprovado','ajuste') returning versao into v;
+  if not found then raise exception 'este post não pode mais ser descartado'; end if;
+  insert into comentarios (post_id, autor, tipo, texto, versao) values (p_id, lower(auth.jwt() ->> 'email'), 'reprovacao', coalesce(trim(p_texto), ''), v);
+end $$;
+revoke all on function reprovar(text, text) from public, anon;
+grant execute on function reprovar(text, text) to authenticated;
