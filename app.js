@@ -36,7 +36,7 @@ const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar'
 const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
   sessao: null, aba: 'aprovar', histAberto: {}, posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
-  mes: mesDe(new Date()), produto: null, planos: [], ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, descartarAberto: null, modal: null, carregado: false,
+  mes: mesDe(new Date()), produto: null, planos: [], produtos: [], refazer: null, excluirPlano: null, editProduto: null, ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, descartarAberto: null, modal: null, carregado: false,
 };
 
 /* ---------- utilidades ---------- */
@@ -62,7 +62,11 @@ function nome(p) {
   return resto;
 }
 function url(caminho) { return caminho ? st.urls[caminho] : null; }
-function miniatura(p) { return url(p.formato === 'reels' ? p.capa : p.midias[0]); }
+function ehVideo(caminho) { return /\.mp4$/i.test(caminho || ''); }
+function miniatura(p) { return p.formato === 'reels' ? url(p.capa) : ehVideo(p.midias[0]) ? null : url(p.midias[0]); }
+function rotuloFormato(p) { return p.formato === 'story' && (p.video || ehVideo(p.midias[0])) ? 'Story (vídeo)' : FORMATO[p.formato]; }
+function corProduto(nome) { return st.produtos.find(x => x.nome === nome)?.cor || '#A8A29E'; }
+function chipProduto(nome) { return `<span class="chip produto" style="--pc:${corProduto(nome)}">${esc(nome)}</span>`; }
 function toast(msg) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg;
   document.body.append(t); setTimeout(() => t.remove(), 3800);
@@ -75,18 +79,20 @@ function saudacao() {
 
 /* ---------- dados ---------- */
 async function carregar() {
-  const [p, c, a, pl, pt] = await Promise.all([
+  const [p, c, a, pl, pt, pr] = await Promise.all([
     sb.from('posts').select('*').order('quando'),
     sb.from('comentarios').select('*').order('criado_em'),
     sb.from('aprovadores').select('*'),
     sb.from('planejamentos').select('*').order('criado_em', { ascending: false }),
     sb.from('ponte').select('*'),
+    sb.from('produtos').select('*').order('ordem'),
   ]);
   if (p.error) throw p.error;
   st.posts = p.data;
   st.coments = {};
   for (const x of c.data || []) (st.coments[x.post_id] ||= []).push(x);
   st.planos = pl.data || [];
+  st.produtos = pr.data || [];
   st.ultimaRodada = (pt.data || []).find(x => x.chave === 'ultima_rodada')?.valor || null;
   st.nomes = Object.fromEntries((a.data || []).map(x => [x.email, x.nome]));
   const caminhos = [...new Set(st.posts.flatMap(x => [...x.midias, x.capa]).filter(Boolean))];
@@ -141,12 +147,12 @@ setInterval(() => {
 /* ---------- componentes ---------- */
 function midia(p) {
   if (!p.midias.length) return `<div class="midia texto"><div><span class="rotulo">${p.status === 'produzir' ? 'Peça em produção' : 'Ainda sem arte'}</span>
-    <h4>${p.formato === 'reels' ? 'Roteiro do Reels' : 'Briefing da arte'}</h4><div class="roteiro">${esc(p.roteiro || 'Sem roteiro.')}</div></div></div>`;
+    <h4>${p.formato === 'reels' ? 'Roteiro do Reels' : p.video ? 'Roteiro do story em vídeo' : 'Briefing da arte'}</h4><div class="roteiro">${esc(p.roteiro || 'Sem roteiro.')}</div></div></div>`;
   const n = p.midias.length, i = Math.min(st.slide[p.id] || 0, n - 1);
   const atual = url(p.midias[i]);
   let el;
   if (!atual) el = `<div class="carregando">Prévia ainda não enviada</div>`;
-  else if (p.formato === 'reels') el = `<video src="${atual}" poster="${url(p.capa) || ''}" controls playsinline preload="metadata"></video>`;
+  else if (p.formato === 'reels' || ehVideo(p.midias[i])) el = `<video src="${atual}" poster="${url(p.capa) || ''}" controls playsinline preload="metadata"></video>`;
   else el = `<img src="${atual}" alt="${esc(nome(p))}${n > 1 ? `, slide ${i + 1} de ${n}` : ''}">`;
   const nav = n > 1 ? `
     <button class="seta esq" data-slide="${p.id}" data-d="-1" aria-label="Slide anterior">‹</button>
@@ -189,8 +195,8 @@ function card(p) {
     ${midia(p)}
     <div class="corpo">
       <div class="meta">
-        <span class="chip">${esc(p.produto)}</span>
-        <span>${icone(p.formato, 14)} ${FORMATO[p.formato]}</span>
+        ${chipProduto(p.produto)}
+        <span>${icone(p.formato, 14)} ${rotuloFormato(p)}</span>
         <span>· ${quando(p.quando)}</span>
         ${p.versao > 1 ? `<span>· versão ${p.versao}</span>` : ''}
         <span style="margin-left:auto">${pilula(p.status)}</span>
@@ -225,7 +231,7 @@ function linha(p) {
   const img = miniatura(p);
   return `<button class="linha" data-abrir="${p.id}">
     <span class="miniatura" style="${img ? `background-image:url('${img}')` : ''}">${img ? '' : icone(p.formato, 18)}</span>
-    <span><strong>${esc(nome(p))}</strong><small>${FORMATO[p.formato]} · ${esc(p.produto)} · ${quando(p.quando)}${p.status === 'corrigindo' ? ` · <b class="trabalhando">Claude trabalhando há ${minutosDesde(p.atualizado_em)} min</b>` : p.status === 'ajuste' && proximaVerificacao() ? ` · começa por volta das ${hora(proximaVerificacao())}` : ''}</small></span>
+    <span><strong>${esc(nome(p))}</strong><small>${rotuloFormato(p)} · <span class="ponto-prod" style="--pc:${corProduto(p.produto)}"></span>${esc(p.produto)} · ${quando(p.quando)}${p.status === 'corrigindo' ? ` · <b class="trabalhando">Claude trabalhando há ${minutosDesde(p.atualizado_em)} min</b>` : p.status === 'ajuste' && proximaVerificacao() ? ` · começa por volta das ${hora(proximaVerificacao())}` : ''}</small></span>
     ${pilula(p.status)}
   </button>`;
 }
@@ -266,7 +272,7 @@ function telaCalendario() {
     const evs = porDia[chave] || [];
     celulas += `<div class="dia ${chave === hoje ? 'hoje' : ''} ${evs.length ? '' : 'vazio-dia'}"><span class="num">${d}</span>${evs.map(p => {
       const s = STATUS[p.status] || {};
-      return `<button class="evento" style="--c:${s.cor}" data-abrir="${p.id}"><span class="tipo">${icone(p.formato, 12)} ${FORMATO[p.formato]} · ${esc(p.produto)}</span><b>${esc(nome(p))}</b>${pilula(p.status)}</button>`;
+      return `<button class="evento" style="--c:${s.cor};--pc:${corProduto(p.produto)}" data-abrir="${p.id}"><span class="tipo">${icone(p.formato, 12)} ${rotuloFormato(p)} · <span class="ponto-prod"></span><span class="nome-prod">${esc(p.produto)}</span></span><b>${esc(nome(p))}</b>${pilula(p.status)}</button>`;
     }).join('')}</div>`;
   }
   const publicados = doMes.filter(p => p.status === 'publicado').length;
@@ -280,62 +286,122 @@ function telaCalendario() {
     ${LEGENDA_CAL.map(pilula).join('')}
     <span class="sep"></span>
     <button class="${st.produto ? '' : 'on'}" data-produto="">Todos</button>
-    ${produtos.map(x => `<button class="${st.produto === x ? 'on' : ''}" data-produto="${esc(x)}">${esc(x)}</button>`).join('')}
+    ${produtos.map(x => `<button class="${st.produto === x ? 'on' : ''}" data-produto="${esc(x)}"><span class="ponto-prod" style="--pc:${corProduto(x)}"></span>${esc(x)}</button>`).join('')}
   </div>
   <div class="grade">${['DOM', 'SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB'].map(d => `<div class="dow">${d}</div>`).join('')}${celulas}</div>`;
 }
 
-const PRODUTOS = ['Caixa Eventos', 'Agro', 'Parques', 'ERP', 'Nota Fiscal', 'Food', 'Institucional'];
 const TIPOS = { mes: ['Mês completo', 'Uma peça por dia, com rodízio entre os produtos'],
                 serie: ['Série paralela', 'Uma série junto com o plano que já existe'],
                 avulso: ['Post avulso', 'Uma publicação fora do plano'] };
+const STORIES = { nao: ['Sem stories', 'Só os posts do feed'],
+                  diario: ['Todo dia', 'Um story por dia, inclusive fim de semana'],
+                  uteis: ['Dias úteis', 'Um story de segunda a sexta'] };
 const PLANO_STATUS = { pedido: ['Na fila', 'var(--faint)'], gerando: ['Claude montando', 'var(--st-ajuste)'],
-                       pronto: ['Pronto', 'var(--st-publicado)'], erro: ['Deu erro', 'var(--st-atencao)'] };
+                       pronto: ['Pronto', 'var(--st-publicado)'], erro: ['Deu erro', 'var(--st-atencao)'],
+                       descartado: ['Excluído', 'var(--faint)'] };
+const CORES_SUGERIDAS = ['#E87018', '#E5484D', '#2E9E4F', '#2F7BEA', '#8B5CF6', '#14B8A6', '#EAB308', '#EC4899', '#A8A29E'];
 
 function proximoMes() { const [a, m] = mesDe(new Date()).split('-').map(Number); return mesDe(new Date(Date.UTC(a, m, 15))); }
 function nomeMes(mes) { const t = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' }).format(new Date(mes + '-15T12:00:00Z')); return t[0].toUpperCase() + t.slice(1); }
+function produtosAtivos() { return st.produtos.filter(x => x.ativo); }
 
 function formPlano() {
-  const campo = (nome, rotulo, dica) => `<label class="campo">${rotulo}<textarea name="${nome}" rows="2" placeholder="${dica}"></textarea></label>`;
+  const base = st.planos.find(x => x.id === st.refazer) || {};
+  const campo = (nome, rotulo, dica) => `<label class="campo">${rotulo}<textarea name="${nome}" rows="2" placeholder="${dica}">${esc(base[nome] || '')}</textarea></label>`;
+  // padrão pedido em 11/11: stories todo dia, 1 vídeo por semana
+  const tipo = base.tipo || 'mes', stories = base.stories && base.stories !== 'nao' ? base.stories : 'diario';
+  const videos = base.stories && base.stories !== 'nao' ? base.stories_videos : 1;
+  const posts = base.id ? st.posts.filter(p => p.planejamento_id === base.id && !['aprovado', 'publicado', 'reprovado'].includes(p.status)).length : 0;
+  const mantidos = base.id ? st.posts.filter(p => p.planejamento_id === base.id && ['aprovado', 'publicado'].includes(p.status)).length : 0;
   return `<form class="painel form-plano" id="form-plano">
-    <div class="campo">Tipo de plano<div class="tipos">${Object.entries(TIPOS).map(([k, [t, d]], i) =>
-      `<label class="tipo"><input type="radio" name="tipo" value="${k}" ${i === 0 ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div></div>
-    <label class="campo">Mês<input type="month" name="mes" value="${proximoMes()}" required></label>
-    <div class="campo">Produtos<div class="chips">${PRODUTOS.map(x => `<label class="chk"><input type="checkbox" name="produtos" value="${x}"><span>${x}</span></label>`).join('')}</div><small>Nenhum marcado = todos, com rodízio.</small></div>
+    ${base.id ? `<div class="aviso" style="--c:var(--st-atencao)"><b>Refazendo: ${TIPOS[base.tipo][0]} · ${nomeMes(base.mes)}.</b>
+      Ao mandar, os ${posts} posts deste plano que ainda não foram aprovados são excluídos${mantidos ? ` (os ${mantidos} já aprovados ficam)` : ''} e o Claude monta um plano novo com as respostas abaixo. Ajuste o que quiser antes de mandar.</div>` : ''}
+    <div class="campo">Tipo de plano<div class="tipos">${Object.entries(TIPOS).map(([k, [t, d]]) =>
+      `<label class="tipo"><input type="radio" name="tipo" value="${k}" ${k === tipo ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div></div>
+    <label class="campo">Mês<input type="month" name="mes" value="${base.mes || proximoMes()}" required></label>
+    <div class="campo">Produtos<div class="chips">${produtosAtivos().map(x => `<label class="chk" style="--pc:${x.cor}"><input type="checkbox" name="produtos" value="${esc(x.nome)}" ${(base.produtos || []).includes(x.nome) ? 'checked' : ''}><span><i class="ponto-prod"></i>${esc(x.nome)}</span></label>`).join('')}</div>
+      <small>Nenhum marcado = todos, com rodízio. Para incluir um produto ou trocar a cor, veja "Produtos e cores" mais abaixo.</small></div>
+    <div class="campo">Stories<div class="tipos">${Object.entries(STORIES).map(([k, [t, d]]) =>
+      `<label class="tipo"><input type="radio" name="stories" value="${k}" ${k === stories ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div>
+      <label class="linha-campo">Quantos desses stories por semana são vídeo?
+        <select name="stories_videos">${[0, 1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}" ${n === videos ? 'selected' : ''}>${n === 0 ? 'nenhum (só fotos)' : n === 1 ? '1 vídeo' : n + ' vídeos'}</option>`).join('')}</select></label>
+      <small>Os outros stories são fotos estáticas para divulgar os produtos, alternando com os posts do feed.</small></div>
     ${campo('objetivo', 'Objetivo', 'Ex.: gerar pedidos de Proposta Comercial do Caixa Eventos para o réveillon')}
     ${campo('datas', 'Datas e campanhas', 'Ex.: Natal, réveillon, férias escolares, campanha de fim de ano até 20/12')}
     ${campo('temas', 'Temas e ideias', 'Ex.: mostrar clientes reais, bastidores da equipe, dúvidas que chegam no suporte')}
     ${campo('observacoes', 'Observações', 'Ex.: menos estático, mais Reels; nada de bebida nas fotos')}
-    <div class="acoes"><button class="btn primario" ${st.enviando ? 'disabled' : ''}>${icone('planejar')} Mandar para a fábrica</button>
+    <div class="acoes"><button class="btn primario" ${st.enviando ? 'disabled' : ''}>${icone('planejar')} ${base.id ? 'Excluir o plano antigo e refazer' : 'Mandar para a fábrica'}</button>
       <button type="button" class="btn" data-fechar-plano>Cancelar</button></div>
   </form>`;
 }
 
+function linhaPlano(pl) {
+  const [rot, cor] = PLANO_STATUS[pl.status] || [pl.status, 'var(--faint)'];
+  const qtd = st.posts.filter(p => p.planejamento_id === pl.id && p.status !== 'reprovado').length;
+  const pode = ['pronto', 'erro', 'pedido'].includes(pl.status);
+  const extra = [pl.produtos?.length ? pl.produtos.join(', ') : 'todos os produtos',
+                 pl.stories && pl.stories !== 'nao' ? `stories ${STORIES[pl.stories][0].toLowerCase()}${pl.stories_videos ? ` (${pl.stories_videos} vídeo${pl.stories_videos > 1 ? 's' : ''}/semana)` : ''}` : ''].filter(Boolean).join(' · ');
+  const confirmar = st.excluirPlano === pl.id ? `
+    <div class="confirma">
+      <div class="aviso" style="--c:var(--st-atencao)"><b>Excluir este plano?</b> Os posts dele que ainda não foram aprovados saem da fila e do calendário. Aprovados e publicados ficam.</div>
+      <div class="acoes"><button class="btn perigo" data-excluir-ok="${pl.id}">Excluir plano</button><button class="btn" data-cancelar-plano>Cancelar</button></div>
+    </div>` : '';
+  return `<div class="linha plano">
+    <span class="miniatura">${icone('calendario', 18)}</span>
+    <span><strong>${TIPOS[pl.tipo][0]} · ${nomeMes(pl.mes)}</strong>
+      <small>Pedido por ${esc(st.nomes[pl.criado_por] || pl.criado_por)} em ${fmt(pl.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${qtd ? ` · ${qtd} posts` : ''} · ${esc(extra)}</small>
+      ${pl.resumo ? `<small class="resumo">${esc(pl.resumo)}</small>` : ''}
+      ${pode ? `<span class="acoes-plano"><button class="btn mini" data-refazer="${pl.id}">Refazer</button><button class="btn mini sutil" data-excluir-plano="${pl.id}">Excluir</button></span>` : ''}
+      ${confirmar}</span>
+    <span class="pilula" style="--c:${cor}">${rot}</span>
+  </div>`;
+}
+
+function telaProdutos() {
+  const ed = st.editProduto;
+  const linhas = produtosAtivos().map(x => ed === x.nome ? formProduto(x) : `
+    <div class="linha produto-linha">
+      <span class="amostra" style="background:${x.cor}"></span>
+      <span><strong>${esc(x.nome)}</strong><small>${x.descricao ? esc(cortar(x.descricao, 140)) : '<i>Sem descrição: o Claude usa o que já sabe do produto.</i>'}</small></span>
+      <button class="btn mini" data-editar-produto="${esc(x.nome)}">Editar</button>
+    </div>`).join('');
+  return `<div class="painel lista">${linhas}${ed === '' ? formProduto({ nome: '', cor: CORES_SUGERIDAS[4], descricao: '' }) :
+    `<div class="linha"><button class="btn mini" data-editar-produto="">+ Adicionar produto</button></div>`}</div>`;
+}
+
+function formProduto(x) {
+  return `<form class="form-produto" id="form-produto" data-antigo="${esc(x.nome)}">
+    <label class="campo">Nome<input name="nome" value="${esc(x.nome)}" required maxlength="40" placeholder="Ex.: Franquias"></label>
+    <div class="campo">Cor<div class="cores-escolha">
+      <input type="color" name="cor" value="${x.cor}" aria-label="Escolher cor">
+      ${CORES_SUGERIDAS.map(c => `<button type="button" class="bolinha" style="background:${c}" data-cor="${c}" aria-label="Usar ${c}"></button>`).join('')}
+    </div><small>Usada no calendário, nos cards e nos filtros.</small></div>
+    <label class="campo">O que é este produto (opcional)<textarea name="descricao" rows="2" placeholder="Ex.: sistema para redes de franquias controlarem as unidades; público: franqueadores">${esc(x.descricao)}</textarea>
+      <small>Vai junto no pedido para o Claude não inventar recursos.</small></label>
+    <div class="acoes"><button class="btn primario">Salvar</button><button type="button" class="btn" data-cancelar-produto>Cancelar</button>
+      ${x.nome ? `<button type="button" class="btn sutil" data-remover-produto="${esc(x.nome)}">Tirar da lista</button>` : ''}</div>
+  </form>`;
+}
+
 function telaPlanejar() {
-  const qtd = id => st.posts.filter(p => p.planejamento_id === id).length;
-  const planos = st.planos.map(pl => {
-    const [rot, cor] = PLANO_STATUS[pl.status];
-    return `<div class="linha plano">
-      <span class="miniatura">${icone('calendario', 18)}</span>
-      <span><strong>${TIPOS[pl.tipo][0]} · ${nomeMes(pl.mes)}</strong>
-        <small>Pedido por ${esc(st.nomes[pl.criado_por] || pl.criado_por)} em ${fmt(pl.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${qtd(pl.id) ? ` · ${qtd(pl.id)} posts` : ''}</small>
-        ${pl.resumo ? `<small class="resumo">${esc(pl.resumo)}</small>` : ''}</span>
-      <span class="pilula" style="--c:${cor}">${rot}</span>
-    </div>`;
-  }).join('');
+  const planos = st.planos.filter(pl => pl.status !== 'descartado').map(linhaPlano).join('');
+  const excluidos = st.planos.filter(pl => pl.status === 'descartado').length;
   return `<div class="estreito">
     ${st.formAberto ? formPlano() : `<div class="painel planejar-cta">
-      <div><h3>Planejar conteúdo</h3><p>Responda algumas perguntas, como numa reunião de pauta. Pode ser o plano do mês, uma série paralela ou um post avulso. Um plano não apaga o outro.</p>
-        <ol class="passos"><li>Você preenche o tipo de plano, o mês, os produtos e as ideias.</li>
+      <div><h3>Planejar conteúdo</h3><p>Responda algumas perguntas, como numa reunião de pauta. Pode ser o plano do mês, uma série paralela ou um post avulso. Um plano não apaga o outro. Não gostou de um plano? Use <b>Refazer</b> nele, logo abaixo.</p>
+        <ol class="passos"><li>Você preenche o tipo de plano, o mês, os produtos, os stories e as ideias.</li>
         <li>O Claude roda a squad de planejamento e monta a pauta e os textos, em cerca de 1 a 2 horas.</li>
         <li>Os textos aparecem em <b>Aprovar</b>. Aprovado o texto, o Claude produz a arte e ela volta para a aprovação final.</li></ol></div>
       <button class="btn primario" data-novo-plano>${icone('calendario')} Começar</button>
     </div>`}
-    <div class="secao-titulo"><h3>Pedidos de planejamento</h3><span>${st.planos.length}</span></div>
+    <div class="secao-titulo"><h3>Pedidos de planejamento</h3><span>${st.planos.length - excluidos}${excluidos ? ` · ${excluidos} excluído${excluidos > 1 ? 's' : ''}` : ''}</span></div>
     <div class="painel lista">${planos || '<div class="linha"><small>Nenhum pedido ainda.</small></div>'}</div>
+    <div class="secao-titulo"><h3>Produtos e cores</h3><span>aparecem no Planejar, no calendário e nos cards</span></div>
+    ${telaProdutos()}
     <div class="secao-titulo"><h3>Identidade visual</h3><span>o Claude e as squads seguem em todo trabalho</span></div>
     <div class="cards-2">
-      <div class="painel identidade"><h4>ThR Softwares</h4><p>Marca mãe: ERP, nota fiscal, Caixa Eventos, Agro, Parques e Food.</p>
+      <div class="painel identidade"><h4>ThR Softwares</h4><p>Marca mãe de todos os produtos.</p>
         <div class="cores">${['#E87018', '#1E1612', '#F58A3A', '#FFFFFF'].map(c => `<span class="cor"><i style="background:${c}"></i>${c}</span>`).join('')}</div>
         <p style="margin:12px 0 0">Fonte: Poppins</p></div>
     </div>
@@ -414,9 +480,9 @@ function renderLogin(app) {
 
 /* ---------- ações ---------- */
 async function atualizar(silencioso = false) {
-  const antes = JSON.stringify([st.posts, st.coments]);
+  const antes = JSON.stringify([st.posts, st.coments, st.planos, st.produtos]);
   try { await carregar(); } catch (e) { if (!silencioso) toast('Não consegui carregar os posts. Tente de novo.'); console.error(e); }
-  if (silencioso && antes === JSON.stringify([st.posts, st.coments])) return; // não reinicia vídeo à toa
+  if (silencioso && antes === JSON.stringify([st.posts, st.coments, st.planos, st.produtos])) return; // não reinicia vídeo à toa
   render();
 }
 
@@ -465,23 +531,51 @@ document.addEventListener('click', async e => {
     toast('Pedido enviado. O Claude corrige e o post volta para aprovação.');
     st.ajusteAberto = null; st.modal = null; await atualizar();
   }
-  else if (d.novoPlano !== undefined) { st.formAberto = true; render(); }
-  else if (d.fecharPlano !== undefined) { st.formAberto = false; render(); }
+  else if (d.novoPlano !== undefined) { st.formAberto = true; st.refazer = null; render(); }
+  else if (d.fecharPlano !== undefined) { st.formAberto = false; st.refazer = null; render(); }
+  else if (d.refazer) { st.refazer = Number(d.refazer); st.formAberto = true; st.excluirPlano = null; render(); scrollTo(0, 0); }
+  else if (d.excluirPlano) { st.excluirPlano = Number(d.excluirPlano); render(); }
+  else if (d.cancelarPlano !== undefined) { st.excluirPlano = null; render(); }
+  else if (d.excluirOk) {
+    b.disabled = true;
+    const { data, error } = await sb.rpc('descartar_planejamento', { p_id: Number(d.excluirOk), p_motivo: '' });
+    if (error) { toast(error.message); b.disabled = false; return; }
+    toast(`Plano excluído. ${data} posts saíram da fila e do calendário.`);
+    st.excluirPlano = null; await atualizar();
+  }
+  else if (d.editarProduto !== undefined) { st.editProduto = d.editarProduto; render(); document.querySelector('#form-produto input[name=nome]')?.focus(); }
+  else if (d.cancelarProduto !== undefined) { st.editProduto = null; render(); }
+  else if (d.cor) { const i = document.querySelector('#form-produto input[name=cor]'); if (i) i.value = d.cor; }
+  else if (d.removerProduto) {
+    if (!confirm(`Tirar "${d.removerProduto}" da lista de produtos do Planejar? Os posts antigos dele continuam com a cor.`)) return;
+    const { error } = await sb.rpc('remover_produto', { p_nome: d.removerProduto });
+    if (error) { toast(error.message); return; }
+    st.editProduto = null; await atualizar();
+  }
   else if (d.menu !== undefined) abrirMenu();
 });
 
 document.addEventListener('submit', async e => {
+  if (e.target.id === 'form-produto') {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const { error } = await sb.rpc('salvar_produto', { p_nome: f.get('nome'), p_cor: f.get('cor'), p_descricao: f.get('descricao'),
+      p_antigo: e.target.dataset.antigo || null });
+    if (error) { toast(error.message); return; }
+    toast('Produto salvo.'); st.editProduto = null; await atualizar(); return;
+  }
   if (e.target.id !== 'form-plano') return;
   e.preventDefault();
   const f = new FormData(e.target);
   st.enviando = true; e.target.querySelector('.primario').disabled = true;
   const { error } = await sb.rpc('criar_planejamento', {
     p_tipo: f.get('tipo'), p_mes: f.get('mes'), p_produtos: f.getAll('produtos'), p_objetivo: f.get('objetivo'),
-    p_datas: f.get('datas'), p_temas: f.get('temas'), p_observacoes: f.get('observacoes') });
+    p_datas: f.get('datas'), p_temas: f.get('temas'), p_observacoes: f.get('observacoes'),
+    p_stories: f.get('stories'), p_stories_videos: Number(f.get('stories_videos')), p_substitui: st.refazer });
   st.enviando = false;
   if (error) { toast(error.message); e.target.querySelector('.primario').disabled = false; return; }
-  toast('Pedido enviado! A fábrica começa em até 15 minutos.');
-  st.formAberto = false; await atualizar();
+  toast(st.refazer ? 'Plano antigo excluído e pedido novo enviado! A fábrica começa em até 15 minutos.' : 'Pedido enviado! A fábrica começa em até 15 minutos.');
+  st.formAberto = false; st.refazer = null; await atualizar();
 });
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.modal) { st.modal = null; render(); } });
@@ -500,6 +594,7 @@ sb.auth.onAuthStateChange((_ev, sessao) => {
   if (!sessao) { st.carregado = false; render(); }
   else if (entrou) { render(); atualizar(); }
 });
-setInterval(() => { if (st.sessao && !st.modal && !st.ajusteAberto && !st.descartarAberto && !st.formAberto && document.visibilityState === 'visible') atualizar(true); }, 60e3);
-document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !st.ajusteAberto && !st.descartarAberto && !st.formAberto) atualizar(true); });
+function editando() { return st.modal || st.ajusteAberto || st.descartarAberto || st.formAberto || st.editProduto !== null || st.excluirPlano; }
+setInterval(() => { if (st.sessao && !editando() && document.visibilityState === 'visible') atualizar(true); }, 60e3);
+document.addEventListener('visibilitychange', () => { if (st.sessao && document.visibilityState === 'visible' && !editando()) atualizar(true); });
 render();

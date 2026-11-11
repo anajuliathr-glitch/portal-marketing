@@ -237,10 +237,10 @@ input { padding: 11px 12px; border-radius: 10px; background: var(--bg); border: 
 .campo textarea { min-height: 0; font-weight: 400; }
 .campo input[type=month] { font-weight: 400; color-scheme: dark; max-width: 220px; }
 .tipos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-.tipo { position: relative; display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; cursor: pointer; font-weight: 400; }
-.tipo input { position: absolute; opacity: 0; }
-.tipo b { font-weight: 600; font-size: 13.5px; }
-.tipo:has(input:checked) { border-color: var(--orange); background: rgba(232, 112, 24, .08); box-shadow: 0 0 0 1px var(--orange); }
+.tipos .tipo { position: relative; display: grid; gap: 2px; padding: 12px 14px; border: 1px solid var(--line-2); border-radius: 10px; cursor: pointer; font-weight: 400; }
+.tipos .tipo input { position: absolute; opacity: 0; }
+.tipos .tipo b { font-weight: 600; font-size: 13.5px; }
+.tipos .tipo:has(input:checked) { border-color: var(--orange); background: rgba(232, 112, 24, .08); box-shadow: 0 0 0 1px var(--orange); }
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .chk { position: relative; }
 .chk input { position: absolute; opacity: 0; }
@@ -261,3 +261,27 @@ input { padding: 11px 12px; border-radius: 10px; background: var(--bg); border: 
 .progresso .tempo { color: var(--muted); font-size: 12px; }
 .trabalhando { color: var(--st-ajuste); font-weight: 500; }
 .fundo-modal .meta { padding-right: 44px; }
+
+/* produtos com cor (11/11) */
+.chip.produto { background: color-mix(in srgb, var(--pc) 18%, transparent); border-color: color-mix(in srgb, var(--pc) 55%, transparent); }
+.ponto-prod { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--pc, var(--faint)); margin-right: 5px; flex: none; }
+.evento { border-top: 3px solid var(--pc, transparent); }
+.evento .nome-prod { color: var(--pc); font-weight: 600; }
+.chk span { display: inline-flex; align-items: center; }
+.chk input:checked + span { background: var(--pc, var(--orange)); border-color: var(--pc, var(--orange)); }
+.chk input:checked + span .ponto-prod { background: #fff; }
+.linha-campo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-weight: 400; color: var(--muted); }
+.linha-campo select { color-scheme: dark; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line-2); font: inherit; }
+.acoes-plano { display: flex; gap: 8px; margin-top: 8px; }
+.btn.mini { padding: 4px 12px; font-size: 12px; }
+.btn.mini.sutil { margin-left: 0; }
+.confirma { display: grid; gap: 10px; margin-top: 10px; }
+.amostra { width: 28px; height: 28px; border-radius: 8px; flex: none; border: 1px solid var(--line-2); }
+.form-produto { padding: 16px 18px; display: grid; gap: 14px; border-bottom: 1px solid var(--line); }
+.form-produto input[name=nome] { max-width: 320px; }
+.cores-escolha { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cores-escolha input[type=color] { width: 44px; height: 32px; padding: 0; border: 1px solid var(--line-2); border-radius: 8px; background: none; cursor: pointer; }
+.bolinha { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line-2); cursor: pointer; padding: 0; }
+.bolinha:hover { border-color: var(--text); }
+.produto-linha > span:nth-child(2) { flex: 1; }
+.plano > span:nth-child(2) { flex: 1; }
