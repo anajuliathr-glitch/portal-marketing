@@ -288,3 +288,5 @@ begin
 end $$;
 revoke all on function criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint) from public, anon;
 grant execute on function criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint) to authenticated;
+alter table planejamentos add column if not exists iniciado_em timestamptz;
+alter table planejamentos add column if not exists progresso jsonb not null default '{}';

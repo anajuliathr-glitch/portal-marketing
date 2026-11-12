@@ -36,7 +36,7 @@ const ABAS = [['aprovar', 'Aprovar'], ['calendario', 'Calendário'], ['planejar'
 const FILA = ['pauta', 'aguardando', 'atencao'];
 const st = {
   sessao: null, aba: 'aprovar', histAberto: {}, posts: [], coments: {}, nomes: {}, urls: {}, urlsEm: 0,
-  mes: mesDe(new Date()), produto: null, planos: [], produtos: [], refazer: null, excluirPlano: null, editProduto: null, ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, descartarAberto: null, modal: null, carregado: false,
+  mes: mesDe(new Date()), produto: null, planos: [], produtos: [], refazer: null, excluirPlano: null, planoAberto: null, editProduto: null, ultimaRodada: null, formAberto: false, enviando: false, slide: {}, ajusteAberto: null, descartarAberto: null, modal: null, carregado: false,
 };
 
 /* ---------- utilidades ---------- */
@@ -336,6 +336,32 @@ function formPlano() {
   </form>`;
 }
 
+function acompanhamento(pl) {
+  if (pl.status === 'pedido') return `<div class="acompanha"><div class="aviso" style="--c:var(--faint)"><b>Na fila.</b> A fábrica verifica os pedidos a cada 15 minutos; este começa na próxima verificação.</div></div>`;
+  const prog = pl.progresso || {};
+  const etapas = prog.etapas || [];
+  if (!etapas.length && pl.status !== 'gerando') return '';
+  const feitas = etapas.filter(e => e.feito_em).length;
+  const atual = pl.status === 'gerando' ? etapas.findIndex(e => !e.feito_em) : -1;
+  const h = iso => fmt(iso, { hour: '2-digit', minute: '2-digit' });
+  let topo = '';
+  if (pl.status === 'gerando' && pl.iniciado_em) {
+    const min = minutosDesde(pl.iniciado_em);
+    const dur = min >= 60 ? `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}` : `${min} min`;
+    topo = `<small class="tempo">Começou às ${h(pl.iniciado_em)} · ${dur} até agora · costuma levar de 1 a 2 horas</small>
+      <div class="barra"><i style="width:${Math.max(4, Math.round(feitas / (etapas.length || 9) * 100))}%"></i></div>`;
+    const visto = prog.visto_em || pl.iniciado_em;
+    if (minutosDesde(visto) > 20) topo += `<div class="aviso" style="--c:var(--st-atencao)">A fábrica não dá sinal desde as ${h(visto)}. O computador da fábrica pode estar desligado ou sem a pasta de rede. Quando ele voltar, o plano recomeça sozinho.</div>`;
+  }
+  const lista = etapas.map((e, i) => {
+    const classe = e.feito_em ? 'ok' : i === atual ? 'agora' : '';
+    const marca = e.feito_em ? '✓' : i === atual ? '●' : '○';
+    const quando = e.feito_em ? h(e.feito_em) : i === atual ? 'em andamento' : '';
+    return `<li class="${classe}"><span>${marca}</span>${esc(e.nome)}<small>${quando}</small></li>`;
+  }).join('') || '<li class="agora"><span>●</span>Lendo o briefing e a squad<small>em andamento</small></li>';
+  return `<div class="acompanha">${topo}<ol class="etapas">${lista}</ol></div>`;
+}
+
 function linhaPlano(pl) {
   const [rot, cor] = PLANO_STATUS[pl.status] || [pl.status, 'var(--faint)'];
   const qtd = st.posts.filter(p => p.planejamento_id === pl.id && p.status !== 'reprovado').length;
@@ -347,12 +373,19 @@ function linhaPlano(pl) {
       <div class="aviso" style="--c:var(--st-atencao)"><b>Excluir este plano?</b> Os posts dele que ainda não foram aprovados saem da fila e do calendário. Aprovados e publicados ficam.</div>
       <div class="acoes"><button class="btn perigo" data-excluir-ok="${pl.id}">Excluir plano</button><button class="btn" data-cancelar-plano>Cancelar</button></div>
     </div>` : '';
+  const vivo = ['pedido', 'gerando'].includes(pl.status);
+  const aberto = vivo || st.planoAberto === pl.id;
   return `<div class="linha plano">
     <span class="miniatura">${icone('calendario', 18)}</span>
     <span><strong>${TIPOS[pl.tipo][0]} · ${nomeMes(pl.mes)}</strong>
       <small>Pedido por ${esc(st.nomes[pl.criado_por] || pl.criado_por)} em ${fmt(pl.criado_em, { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}${qtd ? ` · ${qtd} posts` : ''} · ${esc(extra)}</small>
       ${pl.resumo ? `<small class="resumo">${esc(pl.resumo)}</small>` : ''}
-      ${pode ? `<span class="acoes-plano"><button class="btn mini" data-refazer="${pl.id}">Refazer</button><button class="btn mini sutil" data-excluir-plano="${pl.id}">Excluir</button></span>` : ''}
+      ${aberto ? acompanhamento(pl) : ''}
+      <span class="acoes-plano">
+        ${!vivo && (pl.progresso?.etapas || []).length ? `<button class="btn mini" data-ver-plano="${pl.id}">${aberto ? 'Esconder etapas' : 'Ver etapas'}</button>` : ''}
+        ${pl.status === 'pronto' && qtd ? `<button class="btn mini" data-ir-aprovar>Ver os textos em Aprovar</button>` : ''}
+        ${pode ? `<button class="btn mini" data-refazer="${pl.id}">Refazer</button><button class="btn mini sutil" data-excluir-plano="${pl.id}">Excluir</button>` : ''}
+      </span>
       ${confirmar}</span>
     <span class="pilula" style="--c:${cor}">${rot}</span>
   </div>`;
@@ -534,6 +567,8 @@ document.addEventListener('click', async e => {
   else if (d.novoPlano !== undefined) { st.formAberto = true; st.refazer = null; render(); }
   else if (d.fecharPlano !== undefined) { st.formAberto = false; st.refazer = null; render(); }
   else if (d.refazer) { st.refazer = Number(d.refazer); st.formAberto = true; st.excluirPlano = null; render(); scrollTo(0, 0); }
+  else if (d.verPlano) { st.planoAberto = st.planoAberto === Number(d.verPlano) ? null : Number(d.verPlano); render(); }
+  else if (d.irAprovar !== undefined) { st.aba = 'aprovar'; render(); scrollTo(0, 0); }
   else if (d.excluirPlano) { st.excluirPlano = Number(d.excluirPlano); render(); }
   else if (d.cancelarPlano !== undefined) { st.excluirPlano = null; render(); }
   else if (d.excluirOk) {
