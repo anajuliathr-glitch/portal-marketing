@@ -290,3 +290,31 @@ revoke all on function criar_planejamento(text, text, text[], text, text, text, 
 grant execute on function criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint) to authenticated;
 alter table planejamentos add column if not exists iniciado_em timestamptz;
 alter table planejamentos add column if not exists progresso jsonb not null default '{}';
+-- 12/11/2026: volume por dia no Planejar
+alter table planejamentos add column if not exists feed_por_dia int not null default 1;
+alter table planejamentos add column if not exists stories_por_dia int not null default 1;
+
+drop function if exists criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint);
+create or replace function criar_planejamento(p_tipo text, p_mes text, p_produtos text[], p_objetivo text,
+                                              p_datas text, p_temas text, p_observacoes text,
+                                              p_stories text default 'nao', p_stories_videos int default 0,
+                                              p_substitui bigint default null,
+                                              p_feed_por_dia int default 1, p_stories_por_dia int default 1) returns bigint
+language plpgsql security definer set search_path = public as $$
+declare v bigint;
+begin
+  if not eh_aprovador() then raise exception 'sem permissão'; end if;
+  if p_mes !~ '^\d{4}-\d{2}$' then raise exception 'mês inválido'; end if;
+  if coalesce(p_stories, 'nao') not in ('nao','diario','uteis') then raise exception 'opção de stories inválida'; end if;
+  if p_substitui is not null then perform descartar_planejamento(p_substitui, 'Plano refeito.'); end if;
+  insert into planejamentos (criado_por, tipo, mes, produtos, objetivo, datas, temas, observacoes, stories, stories_videos,
+                             substitui, feed_por_dia, stories_por_dia)
+  values (lower(auth.jwt() ->> 'email'), p_tipo, p_mes, coalesce(p_produtos, '{}'), coalesce(p_objetivo, ''),
+          coalesce(p_datas, ''), coalesce(p_temas, ''), coalesce(p_observacoes, ''), coalesce(p_stories, 'nao'),
+          greatest(0, least(7, coalesce(p_stories_videos, 0))), p_substitui,
+          greatest(1, least(3, coalesce(p_feed_por_dia, 1))), greatest(1, least(3, coalesce(p_stories_por_dia, 1))))
+  returning id into v;
+  return v;
+end $$;
+revoke all on function criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint, int, int) from public, anon;
+grant execute on function criar_planejamento(text, text, text[], text, text, text, text, text, int, bigint, int, int) to authenticated;

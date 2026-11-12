@@ -295,8 +295,8 @@ const TIPOS = { mes: ['Mês completo', 'Uma peça por dia, com rodízio entre os
                 serie: ['Série paralela', 'Uma série junto com o plano que já existe'],
                 avulso: ['Post avulso', 'Uma publicação fora do plano'] };
 const STORIES = { nao: ['Sem stories', 'Só os posts do feed'],
-                  diario: ['Todo dia', 'Um story por dia, inclusive fim de semana'],
-                  uteis: ['Dias úteis', 'Um story de segunda a sexta'] };
+                  diario: ['Todo dia', 'Inclusive fim de semana'],
+                  uteis: ['Dias úteis', 'De segunda a sexta'] };
 const PLANO_STATUS = { pedido: ['Na fila', 'var(--faint)'], gerando: ['Claude montando', 'var(--st-ajuste)'],
                        pronto: ['Pronto', 'var(--st-publicado)'], erro: ['Deu erro', 'var(--st-atencao)'],
                        descartado: ['Excluído', 'var(--faint)'] };
@@ -327,7 +327,12 @@ function formPlano() {
       `<label class="tipo"><input type="radio" name="stories" value="${k}" ${k === stories ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div>
       <label class="linha-campo">Quantos desses stories por semana são vídeo?
         <select name="stories_videos">${[0, 1, 2, 3, 4, 5, 6, 7].map(n => `<option value="${n}" ${n === videos ? 'selected' : ''}>${n === 0 ? 'nenhum (só fotos)' : n === 1 ? '1 vídeo' : n + ' vídeos'}</option>`).join('')}</select></label>
+      <label class="linha-campo">Stories por dia
+        <select name="stories_por_dia">${[1, 2, 3].map(n => `<option value="${n}" ${n === (base.stories_por_dia || 1) ? 'selected' : ''}>${n} por dia</option>`).join('')}</select></label>
       <small>Os outros stories são fotos estáticas para divulgar os produtos, alternando com os posts do feed.</small></div>
+    <label class="campo">Posts no feed por dia (deste plano)
+      <select name="feed_por_dia">${[1, 2, 3].map(n => `<option value="${n}" ${n === (base.feed_por_dia || 1) ? 'selected' : ''}>${n} por dia</option>`).join('')}</select>
+      <small>Somam com o que já existe no mês. Ex.: plano do mês com 1 por dia + série com 2 por dia = 3 posts no feed por dia.</small></label>
     ${campo('objetivo', 'Objetivo', 'Ex.: gerar pedidos de Proposta Comercial do Caixa Eventos para o réveillon')}
     ${campo('datas', 'Datas e campanhas', 'Ex.: Natal, réveillon, férias escolares, campanha de fim de ano até 20/12')}
     ${campo('temas', 'Temas e ideias', 'Ex.: mostrar clientes reais, bastidores da equipe, dúvidas que chegam no suporte')}
@@ -609,12 +614,13 @@ document.addEventListener('submit', async e => {
   e.preventDefault();
   const f = new FormData(e.target);
   const escolhidos = f.getAll('produtos');
-  if (!confirm(`Confere antes de mandar:\n\nProdutos: ${escolhidos.join(', ') || 'todos, com rodízio'}\nStories: ${STORIES[f.get('stories')][0]}${f.get('stories') !== 'nao' ? ` (${f.get('stories_videos')} vídeo(s) por semana)` : ''}\n\nEstá certo?`)) return;
+  if (!confirm(`Confere antes de mandar:\n\nProdutos: ${escolhidos.join(', ') || 'todos, com rodízio'}\nFeed: ${f.get('feed_por_dia')} por dia\nStories: ${STORIES[f.get('stories')][0]}${f.get('stories') !== 'nao' ? ` (${f.get('stories_por_dia')} por dia, ${f.get('stories_videos')} vídeo(s) por semana)` : ''}\n\nEstá certo?`)) return;
   st.enviando = true; e.target.querySelector('.primario').disabled = true;
   const { error } = await sb.rpc('criar_planejamento', {
     p_tipo: f.get('tipo'), p_mes: f.get('mes'), p_produtos: f.getAll('produtos'), p_objetivo: f.get('objetivo'),
     p_datas: f.get('datas'), p_temas: f.get('temas'), p_observacoes: f.get('observacoes'),
-    p_stories: f.get('stories'), p_stories_videos: Number(f.get('stories_videos')), p_substitui: st.refazer });
+    p_stories: f.get('stories'), p_stories_videos: Number(f.get('stories_videos')), p_substitui: st.refazer,
+    p_feed_por_dia: Number(f.get('feed_por_dia')), p_stories_por_dia: Number(f.get('stories_por_dia')) });
   st.enviando = false;
   if (error) { toast(error.message); e.target.querySelector('.primario').disabled = false; return; }
   toast(st.refazer ? 'Plano antigo excluído e pedido novo enviado! A fábrica começa em até 15 minutos.' : 'Pedido enviado! A fábrica começa em até 15 minutos.');
