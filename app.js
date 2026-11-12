@@ -321,7 +321,8 @@ function formPlano() {
       `<label class="tipo"><input type="radio" name="tipo" value="${k}" ${k === tipo ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div></div>
     <label class="campo">Mês<input type="month" name="mes" value="${base.mes || proximoMes()}" required></label>
     <div class="campo">Produtos<div class="chips">${produtosAtivos().map(x => `<label class="chk" style="--pc:${x.cor}"><input type="checkbox" name="produtos" value="${esc(x.nome)}" ${(base.produtos || []).includes(x.nome) ? 'checked' : ''}><span><i class="ponto-prod"></i>${esc(x.nome)}</span></label>`).join('')}</div>
-      <small>Nenhum marcado = todos, com rodízio. Para incluir um produto ou trocar a cor, veja "Produtos e cores" mais abaixo.</small></div>
+      <div class="vao-entrar" id="vao-entrar">${resumoProdutos(base.produtos || [])}</div>
+      <small>Clique no produto para marcar: marcado fica preenchido com a cor e com ✓. Nenhum marcado = todos, com rodízio.</small></div>
     <div class="campo">Stories<div class="tipos">${Object.entries(STORIES).map(([k, [t, d]]) =>
       `<label class="tipo"><input type="radio" name="stories" value="${k}" ${k === stories ? 'checked' : ''}><b>${t}</b><small>${d}</small></label>`).join('')}</div>
       <label class="linha-campo">Quantos desses stories por semana são vídeo?
@@ -360,6 +361,11 @@ function acompanhamento(pl) {
     return `<li class="${classe}"><span>${marca}</span>${esc(e.nome)}<small>${quando}</small></li>`;
   }).join('') || '<li class="agora"><span>●</span>Lendo o briefing e a squad<small>em andamento</small></li>';
   return `<div class="acompanha">${topo}<ol class="etapas">${lista}</ol></div>`;
+}
+
+function resumoProdutos(lista) {
+  return lista.length ? `<b>Vão entrar neste plano:</b> ${lista.map(n => chipProduto(n)).join(' ')}`
+                      : '<b>Nenhum produto marcado:</b> o plano usa todos, com rodízio.';
 }
 
 function linhaPlano(pl) {
@@ -602,6 +608,8 @@ document.addEventListener('submit', async e => {
   if (e.target.id !== 'form-plano') return;
   e.preventDefault();
   const f = new FormData(e.target);
+  const escolhidos = f.getAll('produtos');
+  if (!confirm(`Confere antes de mandar:\n\nProdutos: ${escolhidos.join(', ') || 'todos, com rodízio'}\nStories: ${STORIES[f.get('stories')][0]}${f.get('stories') !== 'nao' ? ` (${f.get('stories_videos')} vídeo(s) por semana)` : ''}\n\nEstá certo?`)) return;
   st.enviando = true; e.target.querySelector('.primario').disabled = true;
   const { error } = await sb.rpc('criar_planejamento', {
     p_tipo: f.get('tipo'), p_mes: f.get('mes'), p_produtos: f.getAll('produtos'), p_objetivo: f.get('objetivo'),
@@ -611,6 +619,12 @@ document.addEventListener('submit', async e => {
   if (error) { toast(error.message); e.target.querySelector('.primario').disabled = false; return; }
   toast(st.refazer ? 'Plano antigo excluído e pedido novo enviado! A fábrica começa em até 15 minutos.' : 'Pedido enviado! A fábrica começa em até 15 minutos.');
   st.formAberto = false; st.refazer = null; await atualizar();
+});
+
+document.addEventListener('change', e => {
+  if (e.target.name !== 'produtos') return;
+  const el = document.getElementById('vao-entrar');
+  if (el) el.innerHTML = resumoProdutos(new FormData(document.getElementById('form-plano')).getAll('produtos'));
 });
 
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && st.modal) { st.modal = null; render(); } });
