@@ -314,3 +314,7 @@ html, body { overflow-x: hidden; }
 .evento { min-width: 0; overflow-wrap: anywhere; }
 .evento .tipo { flex-wrap: wrap; }
 @media (max-width: 860px) { main { padding: 0 16px; max-width: none; } .cabecalho, .topbar { max-width: none; } }
+/* card do calendário nunca passa da coluna do dia (13/11) */
+.evento { width: 100%; max-width: 100%; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+.evento > * { min-width: 0; max-width: 100%; }
+.evento .pilula { white-space: normal; line-height: 1.3; }
